@@ -1,21 +1,31 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Boxes, Building2, ChevronRight, CircleAlert, FlaskConical, Network } from "lucide-react";
 import Link from "next/link";
 import { PageHeader } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
+import { applyStarterTemplate, type StarterTemplate } from "@/lib/domain/templates";
 import { formatDate, formatNumber, formatQuantity } from "@/lib/format";
+import { notify } from "@/lib/notify";
 import { analyzeNetwork } from "@/lib/view-models";
 import { useWorkspace } from "@/lib/workspace-context";
+import { TemplatePicker } from "./template-picker";
 
 export function Dashboard() {
-  const { scenarios, snapshot, href } = useWorkspace();
+  const { data, setData, mode, scenarios, snapshot, href } = useWorkspace();
+  const [showTemplates, setShowTemplates] = useState(false);
   const baseline = scenarios.find((item) => item.id === "baseline") ?? scenarios[0];
   const network = useMemo(() => analyzeNetwork(snapshot, baseline), [snapshot, baseline]);
   const isEmpty = snapshot.suppliers.length === 0 && snapshot.materials.length === 0 && snapshot.products.length === 0;
   const critical = new Set(network.single_source_risks.map(({ material_id }) => material_id));
   const name = snapshot.business.name.replace(/\s*\(DATA SIMULASI\)\s*$/i, "");
+
+  function handleSelectTemplate(tpl: StarterTemplate) {
+    setData(applyStarterTemplate(data, tpl.id, mode));
+    setShowTemplates(false);
+    notify.success(`Template "${tpl.name}" diterapkan.`);
+  }
 
   return (
     <>
@@ -32,12 +42,23 @@ export function Dashboard() {
         <section className="guide-panel start-panel">
           <div className="guide-icon"><Boxes size={23} aria-hidden="true" /></div>
           <div><h2>Mulai dari nol</h2><p>Workspace ini masih kosong. Ikuti tiga langkah singkat ini.</p></div>
-          <Button asChild><Link href={href("/data")}>Isi Data Usaha</Link></Button>
+          <div className="action-row start-actions">
+            <Button
+              type="button"
+              variant="outline"
+              aria-expanded={showTemplates}
+              onClick={() => setShowTemplates((value) => !value)}
+            >
+              Pilih Template Starter
+            </Button>
+            <Button asChild><Link href={href("/data")}>Isi Data Usaha</Link></Button>
+          </div>
           <ol className="start-steps">
             <li>Tambahkan pemasok, bahan baku, dan produk di <Link href={href("/data")} className="text-link">Data Usaha</Link>.</li>
             <li>Isi resep, stok, permintaan, dan pengiriman atau penawaran pemasok.</li>
             <li>Jalankan <Link href={href("/simulator")} className="text-link">Simulator</Link>, lalu lihat <Link href={href("/comparison")} className="text-link">Perbandingan</Link>.</li>
           </ol>
+          {showTemplates && <TemplatePicker onSelect={handleSelectTemplate} />}
         </section>
       )}
       <div className="dashboard-grid">

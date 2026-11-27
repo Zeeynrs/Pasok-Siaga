@@ -1,22 +1,41 @@
 "use client";
 
-import { useState } from "react";
-import { CircleAlert, RotateCcw, Save } from "lucide-react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { CircleAlert, LayoutTemplate, RotateCcw, Save } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
+import { TemplatePicker } from "@/features/dashboard/template-picker";
+import { applyStarterTemplate, type StarterTemplate } from "@/lib/domain/templates";
 import { notify } from "@/lib/notify";
 import { useWorkspace } from "@/lib/workspace-context";
 import { ParameterForm } from "./parameter-form";
 import { StructureEditor } from "./structure-editor";
+
+function PanelQuerySync({ onPanelTemplates }: { onPanelTemplates: () => void }) {
+  const searchParams = useSearchParams();
+  const panel = searchParams.get("panel");
+  useEffect(() => {
+    if (panel === "templates") onPanelTemplates();
+  }, [panel, onPanelTemplates]);
+  return null;
+}
 
 export function DataEditor() {
   const { data, setData, snapshot, mode, signature, comparison, reset, resetting, notice, actionError } = useWorkspace();
   const [resetVersion, setResetVersion] = useState(0);
   const [applied, setApplied] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [pendingTemplate, setPendingTemplate] = useState<StarterTemplate | null>(null);
   const isDemo = mode === "demo";
+  const isEmpty = snapshot.suppliers.length === 0 && snapshot.materials.length === 0 && snapshot.products.length === 0;
   const unsimulated = comparison !== null && comparison.signature !== signature;
   const name = snapshot.business.name.replace(/\s*\(DATA SIMULASI\)\s*$/i, "");
+
+  const openTemplatesPanel = useCallback(() => {
+    setShowTemplates(true);
+  }, []);
 
   async function confirmReset() {
     setConfirming(false);
@@ -25,11 +44,61 @@ export function DataEditor() {
     setApplied("");
   }
 
+  function applyTemplate(tpl: StarterTemplate) {
+    setData(applyStarterTemplate(data, tpl.id, mode));
+    setPendingTemplate(null);
+    setShowTemplates(false);
+    setResetVersion((value) => value + 1);
+    setApplied("");
+    notify.success(`Template "${tpl.name}" diterapkan.`);
+  }
+
+  function handleSelectTemplate(tpl: StarterTemplate) {
+    if (isEmpty) {
+      applyTemplate(tpl);
+      return;
+    }
+    setPendingTemplate(tpl);
+  }
+
   return (
     <>
-      <PageHeader title="Data Usaha">
+      <Suspense fallback={null}>
+        <PanelQuerySync onPanelTemplates={openTemplatesPanel} />
+      </Suspense>
+      <PageHeader
+        title="Data Usaha"
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            aria-expanded={showTemplates}
+            onClick={() => {
+              setShowTemplates((value) => !value);
+              setPendingTemplate(null);
+            }}
+          >
+            <LayoutTemplate size={17} aria-hidden="true" /> Template Starter
+          </Button>
+        }
+      >
         {isDemo ? "Sesuaikan stok, permintaan, dan kapasitas pemasok pada sesi demo ini." : "Sesuaikan stok, permintaan, dan struktur usaha, lalu simpan ke workspace Anda."}
       </PageHeader>
+      {showTemplates && (
+        <section className="panel template-panel" aria-label="Template starter">
+          <div className="panel-body">
+            <TemplatePicker title="Pilih Template Starter Kuliner" onSelect={handleSelectTemplate} />
+            {pendingTemplate && (
+              <div className="state-panel confirm-panel" role="alertdialog" aria-label="Konfirmasi terapkan template">
+                <CircleAlert size={20} aria-hidden="true" />
+                <p>Terapkan template &ldquo;{pendingTemplate.name}&rdquo;? Data usaha dan skenario saat ini akan diganti.</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => setPendingTemplate(null)}>Batal</Button>
+                <Button type="button" size="sm" onClick={() => applyTemplate(pendingTemplate)}>Ya, Terapkan Template</Button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
       <section className="panel" data-tour="parameters">
         <header className="panel-heading"><div><h2>Parameter {name}</h2><p>Masukkan jumlah dalam satuan yang tercantum pada setiap kolom.</p></div></header>
         <div className="panel-body">

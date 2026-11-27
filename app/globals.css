@@ -1049,3 +1049,23 @@ select { appearance: auto; padding-right: 22px; }
   .onboard-nav .button:last-child { flex: 1; }
   .help-menu { right: -4px; width: min(290px, calc(100vw - 24px)); }
 }
+
+/* ---- Pemilih Template Starter ---- */
+.start-actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; flex: none; }
+.start-actions .button { margin-left: 0; }
+.template-panel { margin-bottom: 18px; }
+.template-picker { flex: 1 1 100%; display: grid; gap: 12px; margin-top: 12px; }
+.template-panel .template-picker { margin-top: 0; }
+.template-picker-header h3 { margin: 0; color: var(--ink); font-size: 15px; font-weight: 850; letter-spacing: -.02em; }
+.template-picker-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.template-card { display: flex; flex-direction: column; justify-content: space-between; gap: 12px; padding: 14px 16px; border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); }
+.template-card-body { display: grid; gap: 6px; }
+.template-card h4 { margin: 2px 0 0; color: var(--ink); font-size: 15px; font-weight: 850; line-height: 1.3; }
+.template-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.template-highlight { color: #395448; font-size: 12px; font-weight: 750; }
+.template-card .button { align-self: flex-start; margin-left: 0; }
+@media (max-width: 680px) {
+  .start-actions { width: 100%; margin-left: 0; }
+  .template-grid { grid-template-columns: minmax(0, 1fr); }
+}
