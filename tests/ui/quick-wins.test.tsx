@@ -439,3 +439,60 @@ describe("Aksi cepat dari Jaringan Pasok", () => {
     expect(suppliersDetails).not.toHaveAttribute("open");
   });
 });
+
+describe("Kelas responsif dan pembersihan gaya inline", () => {
+  it("renders semantic CSS classes without inline style attributes on SimulationResults, Comparison, and SupplyNetwork", async () => {
+    const user = userEvent.setup();
+
+    const { unmount: unmountSim } = render(
+      <Workspace mode="demo">
+        <Simulator />
+      </Workspace>,
+    );
+    await screen.findByRole("heading", { level: 1 });
+    await user.click(screen.getByRole("button", { name: "Jalankan Simulasi" }));
+    await screen.findByRole("heading", { name: "Hasil Simulasi" });
+
+    const resultsActions = document.querySelector(".results-actions");
+    expect(resultsActions).toBeInTheDocument();
+    expect(resultsActions).not.toHaveAttribute("style");
+    unmountSim();
+
+    const { unmount: unmountComp } = render(
+      <Workspace mode="demo">
+        <Comparison />
+      </Workspace>,
+    );
+    await screen.findByText("Persentase pemulihan");
+
+    const comparisonControls = document.querySelector(".comparison-controls");
+    const comparisonRoles = document.querySelector(".comparison-roles");
+    const filterChips = document.querySelector(".comparison-filter-chips");
+    const headerActions = document.querySelector(".comparison-header-actions");
+    expect(comparisonControls).toBeInTheDocument();
+    expect(comparisonControls).not.toHaveAttribute("style");
+    expect(comparisonRoles).toBeInTheDocument();
+    expect(filterChips).toBeInTheDocument();
+    expect(filterChips).not.toHaveAttribute("style");
+    expect(filterChips?.querySelectorAll(".filter-chip").length).toBeGreaterThanOrEqual(3);
+    expect(headerActions).toBeInTheDocument();
+    expect(headerActions).not.toHaveAttribute("style");
+    for (const el of comparisonControls?.querySelectorAll("[style]") ?? []) {
+      expect(el).not.toHaveAttribute("style");
+    }
+    unmountComp();
+
+    render(
+      <Workspace mode="demo">
+        <SupplyNetwork />
+      </Workspace>,
+    );
+    await screen.findByRole("heading", { level: 1 });
+    await user.click(screen.getByRole("button", { name: "Daftar" }));
+    await user.click(screen.getByRole("button", { name: /Pemasok B/ }));
+
+    const detailActions = document.querySelector(".detail-actions");
+    expect(detailActions).toBeInTheDocument();
+    expect(detailActions).not.toHaveAttribute("style");
+  });
+});

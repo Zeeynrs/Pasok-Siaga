@@ -57,7 +57,7 @@ function NetworkDetail({
           const related = allNodes.find(({ id }) => id === (edge.source === node.id ? edge.target : edge.source));
           return <li key={edge.id}><strong>{related?.label}</strong><small>{edgeLabel[edge.kind]}{!edge.active && " · Tidak aktif"}</small></li>;
         })}</ul> : <p className="muted">Belum ada hubungan pemasok atau produk.</p>}
-        <div className="action-row" style={{ marginTop: "14px", justifyContent: "flex-start" }}>
+        <div className="detail-actions">
           {node.kind === "supplier" && (
             <Button type="button" size="sm" onClick={() => onTestSupplierFailure(node.entity_id)}>
               Uji jika pemasok ini gagal

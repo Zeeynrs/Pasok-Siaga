@@ -61,7 +61,7 @@ function ComparisonControls({
   const filterLabelId = `${baseId}-filter-label`;
 
   return (
-    <section className="panel comparison-controls" style={{ marginBottom: "16px" }} aria-labelledby={`${baseId}-heading`}>
+    <section className="panel comparison-controls" aria-labelledby={`${baseId}-heading`}>
       <header className="panel-heading">
         <div>
           <h2 id={`${baseId}-heading`}>Atur Pembanding</h2>
@@ -69,7 +69,7 @@ function ComparisonControls({
         </div>
       </header>
       <div className="panel-body">
-        <div className="parameter-fields">
+        <div className="parameter-fields comparison-roles">
           {ROLE_FIELDS.map(({ key, label }) => {
             const selectId = `${baseId}-${key}`;
             return (
@@ -90,16 +90,16 @@ function ComparisonControls({
             );
           })}
         </div>
-        <div className="parameter-section" role="group" aria-labelledby={filterLabelId} style={{ marginTop: "14px" }}>
-          <span id={filterLabelId} style={{ display: "block", fontSize: "12px", fontWeight: 750, marginBottom: "6px" }}>
+        <div className="parameter-section" role="group" aria-labelledby={filterLabelId}>
+          <span id={filterLabelId} className="comparison-filter-label">
             Tampilkan skenario
           </span>
-          <div className="check-list" style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
+          <div className="comparison-filter-chips">
             {results.map((item) => {
               const checked = visibleSet.has(item.scenario_id);
               const isLastVisible = checked && visibleIds.length <= 1;
               return (
-                <label key={item.scenario_id} className="check-row">
+                <label key={item.scenario_id} className="filter-chip">
                   <input
                     type="checkbox"
                     checked={checked}
@@ -201,7 +201,7 @@ export function Comparison() {
       <PageHeader
         title="Perbandingan Skenario"
         action={
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+          <div className="comparison-header-actions">
             {!comparing && fresh && displayed && (
               <Button type="button" variant="outline" onClick={handleDownloadCsv}>
                 <Download size={17} aria-hidden="true" /> Unduh CSV

@@ -62,7 +62,7 @@ export function SimulationResults({ result, snapshot }: { result: SimulationResu
     <div className="results" aria-label="Hasil Simulasi">
       <header className="results-heading"><div><h2>Hasil Simulasi</h2><p>Batas waktu pasokan {formatDate(result.cutoff_date)}</p></div><SolverLabel status={result.solver_status} /></header>
       {kpis && (
-        <div className="results-actions" role="group" aria-label="Aksi hasil simulasi" style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+        <div className="results-actions" role="group" aria-label="Aksi hasil simulasi">
           <Button type="button" variant="outline" size="sm" onClick={() => void handleCopy()}>
             <Copy size={16} aria-hidden="true" /> {hasPurchases ? "Salin Pesan Order (WA)" : "Salin Ringkasan"}
           </Button>
