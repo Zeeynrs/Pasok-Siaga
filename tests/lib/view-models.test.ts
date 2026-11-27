@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { DAPUR_SARI_FALLBACK_FIXTURE } from "@/lib/domain/fixture";
 import type { ScenarioResult, WorkspaceData } from "@/lib/domain/types";
-import { analyzeNetwork, toComparisonView, toSimulationView } from "@/lib/view-models";
+import { analyzeNetwork, recomputeComparisonView, toComparisonView, toSimulationView } from "@/lib/view-models";
 import { solveScenario } from "@/lib/solver/milp-solver";
 
 const fresh = (): WorkspaceData => structuredClone(DAPUR_SARI_FALLBACK_FIXTURE);
@@ -151,5 +151,75 @@ describe("toComparisonView", () => {
     expect(toComparisonView(worse, d.scenarios, d.snapshot).warnings).toContain(
       "Skenario mitigasi menghasilkan estimasi kontribusi lebih rendah daripada skenario gangguan.",
     );
+  });
+});
+
+describe("recomputeComparisonView", () => {
+  const defaultRoles = { baselineId: "baseline", outageId: "outage", mitigationId: "mitigation" };
+
+  it("matches toComparisonView when using default roles and omitting or passing all visibleIds", () => {
+    const { snapshot, scenarios } = fresh();
+    const baseView = toComparisonView(results, scenarios, snapshot);
+    expect(recomputeComparisonView(baseView, defaultRoles)).toEqual(baseView);
+    expect(recomputeComparisonView(baseView, defaultRoles, ["baseline", "outage", "mitigation"])).toEqual(baseView);
+  });
+
+  it("recomputes recovered contribution and recovery percentage when a custom scenario is chosen as mitigationId", async () => {
+    const d = fresh();
+    const customScenario = {
+      ...d.scenarios.find((s) => s.id === "mitigation")!,
+      id: "mitigasi_2",
+      name: "Mitigasi Stok Tambahan",
+      overrides: { stock_by_material: { flour: 16_000 } },
+    };
+    const scenarios = [...d.scenarios, customScenario];
+    const rs = await Promise.all(scenarios.map((s) => solveScenario(d.snapshot, s)));
+    const baseView = toComparisonView(rs, scenarios, d.snapshot);
+
+    const recomputed = recomputeComparisonView(baseView, {
+      ...defaultRoles,
+      mitigationId: "mitigasi_2",
+    });
+
+    const customNet = baseView.results.find((r) => r.scenario_id === "mitigasi_2")!.kpis!.net_contribution_idr;
+    const outageNet = baseView.results.find((r) => r.scenario_id === "outage")!.kpis!.net_contribution_idr;
+    expect(customNet).toBeGreaterThan(baseView.results.find((r) => r.scenario_id === "mitigation")!.kpis!.net_contribution_idr);
+    expect(recomputed.contribution_at_risk_idr).toBe(240_000);
+    expect(recomputed.recovered_contribution_idr).toBe(customNet - outageNet);
+    expect(recomputed.recovery_pct).toBeCloseTo(((customNet - outageNet) * 100) / 240_000, 5);
+  });
+
+  it("computes recovery KPIs from full outcome.results even when visibleIds hides a role scenario", async () => {
+    const d = fresh();
+    const customScenario = {
+      ...d.scenarios.find((s) => s.id === "mitigation")!,
+      id: "mitigasi_2",
+      name: "Mitigasi Stok Tambahan",
+      overrides: { stock_by_material: { flour: 16_000 } },
+    };
+    const scenarios = [...d.scenarios, customScenario];
+    const rs = await Promise.all(scenarios.map((s) => solveScenario(d.snapshot, s)));
+    const baseView = toComparisonView(rs, scenarios, d.snapshot);
+
+    const filtered = recomputeComparisonView(
+      baseView,
+      { ...defaultRoles, mitigationId: "mitigasi_2" },
+      ["baseline", "mitigasi_2"],
+    );
+
+    const baselineNet = baseView.results.find((r) => r.scenario_id === "baseline")!.kpis!.net_contribution_idr;
+    const outageNet = baseView.results.find((r) => r.scenario_id === "outage")!.kpis!.net_contribution_idr;
+    const customNet = baseView.results.find((r) => r.scenario_id === "mitigasi_2")!.kpis!.net_contribution_idr;
+
+    expect(filtered.contribution_at_risk_idr).toBe(240_000);
+    expect(filtered.recovered_contribution_idr).toBe(customNet - outageNet);
+    expect(filtered.recovery_pct).toBeCloseTo(((customNet - outageNet) * 100) / 240_000, 5);
+    expect(filtered.results.map((r) => r.scenario_id)).toEqual(["baseline", "mitigasi_2"]);
+    expect(filtered.deltas).toHaveLength(1);
+    expect(filtered.deltas[0]).toMatchObject({
+      from_scenario_id: "baseline",
+      to_scenario_id: "mitigasi_2",
+      net_contribution_delta_idr: customNet - baselineNet,
+    });
   });
 });

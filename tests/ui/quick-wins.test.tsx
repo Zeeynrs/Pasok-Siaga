@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DAPUR_SARI_FALLBACK_FIXTURE, EMPTY_WORKSPACE_FIXTURE } from "@/lib/domain/fixture";
 import { computeInputsSignature } from "@/lib/domain/signature";
@@ -235,5 +236,109 @@ describe("Salin pesan WhatsApp & ekspor CSV", () => {
     const text = await blob.text();
     expect(text).toContain("Normal");
     expect(text).toContain("55%");
+  });
+});
+
+describe("Perbandingan antar skenario kustom", () => {
+  it("allows selecting custom scenario roles, filtering visible scenarios, disabling the last checkbox, and exporting filtered CSV", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.fn((url: string, init?: RequestInit) => handler(url, init));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const createObjectURL = vi.fn(() => "blob:filtered-comp-csv");
+    const revokeObjectURL = vi.fn();
+    const BaseURL = globalThis.URL;
+    class StubURL extends BaseURL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    }
+    vi.stubGlobal("URL", StubURL);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    function SimAndComparisonHarness() {
+      const [page, setPage] = useState<"simulator" | "comparison">("simulator");
+      return (
+        <Workspace mode="demo">
+          <button type="button" onClick={() => setPage("comparison")}>Buka Halaman Perbandingan</button>
+          {page === "simulator" ? <Simulator /> : <Comparison />}
+        </Workspace>
+      );
+    }
+
+    render(<SimAndComparisonHarness />);
+    await screen.findByRole("heading", { level: 1 });
+
+    // Buat skenario kustom dari Mitigasi lalu aktifkan kembali Pemasok A agar kontribusinya naik ke Rp 450.000
+    await user.click(screen.getByRole("radio", { name: "Mitigasi: Pemasok Alternatif Aktif" }));
+    await user.click(screen.getByRole("button", { name: "Tambah Skenario" }));
+    expect(screen.getByRole("radio", { name: "Skenario 1" })).toBeChecked();
+
+    await user.click(screen.getByText("Atur skenario"));
+    await user.click(screen.getByRole("checkbox", { name: "Pemasok A gagal kirim" }));
+
+    await user.click(screen.getByRole("button", { name: "Buka Halaman Perbandingan" }));
+    await screen.findByText("Persentase pemulihan");
+
+    const compareCalls = () => fetchSpy.mock.calls.filter(([url]) => url === "/api/simulate/compare").length;
+    expect(compareCalls()).toBe(1);
+
+    // Panel kontrol Atur Pembanding tersedia dengan 3 dropdown peran & checkbox filter skenario
+    expect(screen.getByRole("heading", { name: "Atur Pembanding" })).toBeInTheDocument();
+    const baselineSelect = screen.getByLabelText("Acuan Normal") as HTMLSelectElement;
+    const outageSelect = screen.getByLabelText("Skenario Gangguan") as HTMLSelectElement;
+    const mitigationSelect = screen.getByLabelText("Skenario Mitigasi") as HTMLSelectElement;
+
+    expect(baselineSelect.value).toBe("baseline");
+    expect(outageSelect.value).toBe("outage");
+    expect(mitigationSelect.value).toBe("mitigation");
+
+    // Ubah Skenario Mitigasi ke skenario kustom tanpa memanggil ulang /api/simulate/compare
+    await user.selectOptions(mitigationSelect, "skenario_1");
+    expect(compareCalls()).toBe(1);
+
+    const metrics = document.querySelector(".comparison-metrics") as HTMLElement;
+    expect(within(metrics).getAllByText(/Rp\s240\.000/)).toHaveLength(2);
+    expect(within(metrics).getByText("100%")).toBeInTheDocument();
+    expect(within(metrics).queryByText("55%")).not.toBeInTheDocument();
+
+    // Nonaktifkan checkbox filter hingga tersisa 1 skenario aktif (yang harus disabled)
+    const normalCheck = screen.getByRole("checkbox", { name: "Normal" });
+    const outageCheck = screen.getByRole("checkbox", { name: "Pemasok Utama Gagal" });
+    const mitigationCheck = screen.getByRole("checkbox", { name: "Mitigasi: Pemasok Alternatif Aktif" });
+    const customCheck = screen.getByRole("checkbox", { name: "Skenario 1" });
+
+    await user.click(outageCheck);
+    await user.click(mitigationCheck);
+
+    const table = screen.getAllByRole("table")[0];
+    expect(within(table).queryByText("Pemasok Utama Gagal")).not.toBeInTheDocument();
+    expect(within(table).queryByText("Mitigasi: Pemasok Alternatif Aktif")).not.toBeInTheDocument();
+    expect(within(table).getByText("Normal")).toBeInTheDocument();
+    expect(within(table).getByText("Skenario 1")).toBeInTheDocument();
+
+    // KPI pemulihan tetap memakai skenario peran dari hasil penuh walau Pemasok Utama Gagal disembunyikan
+    expect(within(metrics).getByText("100%")).toBeInTheDocument();
+
+    // Nonaktifkan Normal sehingga tinggal Skenario 1; checkbox terakhir menjadi disabled
+    await user.click(normalCheck);
+    expect(customCheck).toBeChecked();
+    expect(customCheck).toBeDisabled();
+    expect(within(table).queryByText("Normal")).not.toBeInTheDocument();
+    expect(within(table).getByText("Skenario 1")).toBeInTheDocument();
+
+    // Aktifkan kembali Normal agar ekspor CSV berisi 2 skenario terfilter saja
+    await user.click(normalCheck);
+    expect(customCheck).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Unduh CSV" }));
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    const blob = (createObjectURL.mock.calls[0] as unknown[])[0] as Blob;
+    const csv = await blob.text();
+    expect(csv).toContain("Normal");
+    expect(csv).toContain("Skenario 1");
+    expect(csv).toContain("100%");
+    expect(csv).not.toContain("Pemasok Utama Gagal");
+    expect(compareCalls()).toBe(1);
   });
 });

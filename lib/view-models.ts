@@ -231,22 +231,31 @@ export function toSimulationView(result: ScenarioResult, snapshot: WorkspaceSnap
 
 /* -------------------------------- Perbandingan ------------------------------- */
 
+export interface ComparisonRoles {
+  baselineId: string;
+  outageId: string;
+  mitigationId: string;
+}
+
+const DEFAULT_COMPARISON_ROLES: ComparisonRoles = {
+  baselineId: "baseline",
+  outageId: "outage",
+  mitigationId: "mitigation",
+};
+
 const pct = (delta: number | null, reference: number | null) =>
   reference && delta !== null ? (delta * 100) / reference : null;
 
-export function toComparisonView(
-  results: ScenarioResult[],
-  scenarios: ScenarioConfig[],
-  snapshot: WorkspaceSnapshot,
+/** Menyusun ringkasan KPI pemulihan (dari semua skenario sesuai peran) serta selisih berurutan dan peringatan atas skenario terlihat. */
+function summarizeComparison(
+  allViews: SimulationResult[],
+  visibleViews: SimulationResult[],
+  roles: ComparisonRoles,
 ): ComparisonResult {
-  const views = scenarios.flatMap((scenario) => {
-    const result = results.find((r) => r.scenario_id === scenario.id);
-    return result ? [toSimulationView(result, snapshot, scenario)] : [];
-  });
-  const net = (id: string) => views.find((v) => v.scenario_id === id)?.kpis?.net_contribution_idr ?? null;
+  const net = (id: string) => allViews.find((v) => v.scenario_id === id)?.kpis?.net_contribution_idr ?? null;
 
-  const deltas = views.slice(1).map((current, i) => {
-    const previous = views[i];
+  const deltas = visibleViews.slice(1).map((current, i) => {
+    const previous = visibleViews[i];
     const from = previous.kpis?.net_contribution_idr ?? null;
     const to = current.kpis?.net_contribution_idr ?? null;
     const delta = from !== null && to !== null ? to - from : null;
@@ -258,24 +267,49 @@ export function toComparisonView(
     };
   });
 
-  const baseline = net("baseline");
-  const outage = net("outage");
-  const mitigation = net("mitigation");
+  const baseline = net(roles.baselineId);
+  const outage = net(roles.outageId);
+  const mitigation = net(roles.mitigationId);
   const atRisk = baseline !== null && outage !== null ? Math.max(0, baseline - outage) : null;
   const recovered = mitigation !== null && outage !== null ? mitigation - outage : null;
 
   const warnings: string[] = [];
-  if (views.some((v) => v.kpis === null)) warnings.push("Selisih untuk skenario yang belum memiliki rencana tidak dapat dihitung.");
+  if (visibleViews.some((v) => v.kpis === null)) warnings.push("Selisih untuk skenario yang belum memiliki rencana tidak dapat dihitung.");
   if (recovered !== null && recovered < 0) {
     warnings.push("Skenario mitigasi menghasilkan estimasi kontribusi lebih rendah daripada skenario gangguan.");
   }
 
   return {
-    results: views,
+    results: visibleViews,
     deltas,
     contribution_at_risk_idr: atRisk,
     recovered_contribution_idr: recovered,
     recovery_pct: pct(recovered, atRisk),
     warnings,
   };
+}
+
+export function toComparisonView(
+  results: ScenarioResult[],
+  scenarios: ScenarioConfig[],
+  snapshot: WorkspaceSnapshot,
+): ComparisonResult {
+  const views = scenarios.flatMap((scenario) => {
+    const result = results.find((r) => r.scenario_id === scenario.id);
+    return result ? [toSimulationView(result, snapshot, scenario)] : [];
+  });
+  return summarizeComparison(views, views, DEFAULT_COMPARISON_ROLES);
+}
+
+/** Menghitung ulang tampilan perbandingan secara lokal berdasarkan peran pembanding dan daftar skenario yang terlihat. */
+export function recomputeComparisonView(
+  outcome: ComparisonResult,
+  roles: ComparisonRoles,
+  visibleIds?: string[],
+): ComparisonResult {
+  const visibleSet = visibleIds ? new Set(visibleIds) : null;
+  const visibleViews = visibleSet
+    ? outcome.results.filter((v) => visibleSet.has(v.scenario_id))
+    : outcome.results;
+  return summarizeComparison(outcome.results, visibleViews, roles);
 }

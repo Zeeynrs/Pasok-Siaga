@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Download, Info, Play } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -11,12 +11,111 @@ import { comparisonToCsv, downloadCsv } from "@/lib/export";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { notify } from "@/lib/notify";
 import type { ComparisonResult } from "@/lib/types";
+import { recomputeComparisonView, type ComparisonRoles } from "@/lib/view-models";
 import { useWorkspace } from "@/lib/workspace-context";
 import { SolverLabel, WarningList } from "./results";
 import { scenarioLabel } from "./scenario-picker";
 
 const Chart = dynamic(() => import("./comparison-chart").then(({ ComparisonChart }) => ComparisonChart), { ssr: false, loading: () => <Busy label="Memuat grafik…" /> });
 const shortNames: Record<string, string> = { baseline: "Normal", outage: "Gangguan", mitigation: "Mitigasi" };
+
+const DEFAULT_ROLES: ComparisonRoles = {
+  baselineId: "baseline",
+  outageId: "outage",
+  mitigationId: "mitigation",
+};
+
+const ROLE_FIELDS: { key: keyof ComparisonRoles; label: string; fallbackIndex: number }[] = [
+  { key: "baselineId", label: "Acuan Normal", fallbackIndex: 0 },
+  { key: "outageId", label: "Skenario Gangguan", fallbackIndex: 1 },
+  { key: "mitigationId", label: "Skenario Mitigasi", fallbackIndex: 2 },
+];
+
+function resolveRoleId(
+  selected: string,
+  preferred: string,
+  fallbackIndex: number,
+  results: ComparisonResult["results"],
+  availableIds: Set<string>,
+): string {
+  if (availableIds.has(selected)) return selected;
+  if (availableIds.has(preferred)) return preferred;
+  return results[fallbackIndex]?.scenario_id ?? results[0]?.scenario_id ?? selected;
+}
+
+function ComparisonControls({
+  results,
+  roles,
+  visibleIds,
+  onChangeRoles,
+  onToggleVisible,
+}: {
+  results: ComparisonResult["results"];
+  roles: ComparisonRoles;
+  visibleIds: string[];
+  onChangeRoles: (next: ComparisonRoles) => void;
+  onToggleVisible: (id: string, visible: boolean) => void;
+}) {
+  const baseId = useId();
+  const visibleSet = new Set(visibleIds);
+  const filterLabelId = `${baseId}-filter-label`;
+
+  return (
+    <section className="panel comparison-controls" style={{ marginBottom: "16px" }} aria-labelledby={`${baseId}-heading`}>
+      <header className="panel-heading">
+        <div>
+          <h2 id={`${baseId}-heading`}>Atur Pembanding</h2>
+          <p>Pilih peran skenario untuk KPI pemulihan dan saring skenario pada tabel serta grafik.</p>
+        </div>
+      </header>
+      <div className="panel-body">
+        <div className="parameter-fields">
+          {ROLE_FIELDS.map(({ key, label }) => {
+            const selectId = `${baseId}-${key}`;
+            return (
+              <div className="field" key={key}>
+                <label htmlFor={selectId}>{label}</label>
+                <select
+                  id={selectId}
+                  value={roles[key]}
+                  onChange={(event) => onChangeRoles({ ...roles, [key]: event.target.value })}
+                >
+                  {results.map((item) => (
+                    <option key={item.scenario_id} value={item.scenario_id}>
+                      {scenarioLabel({ id: item.scenario_id, name: item.scenario_name })}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+        <div className="parameter-section" role="group" aria-labelledby={filterLabelId} style={{ marginTop: "14px" }}>
+          <span id={filterLabelId} style={{ display: "block", fontSize: "12px", fontWeight: 750, marginBottom: "6px" }}>
+            Tampilkan skenario
+          </span>
+          <div className="check-list" style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
+            {results.map((item) => {
+              const checked = visibleSet.has(item.scenario_id);
+              const isLastVisible = checked && visibleIds.length <= 1;
+              return (
+                <label key={item.scenario_id} className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={isLastVisible}
+                    onChange={(event) => onToggleVisible(item.scenario_id, event.target.checked)}
+                  />
+                  <span>{scenarioLabel({ id: item.scenario_id, name: item.scenario_name })}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function ComparisonDetails({ outcome }: { outcome: ComparisonResult }) {
   const lookup = new Map(outcome.results.map((item) => [item.scenario_id, shortNames[item.scenario_id] ?? item.scenario_name]));
@@ -53,6 +152,8 @@ export function Comparison() {
   const { comparison, comparing, comparisonError, signature, runComparison, href } = useWorkspace();
   const attempted = useRef<string | null>(null);
   const fresh = comparison !== null && comparison.signature === signature;
+  const [roles, setRoles] = useState<ComparisonRoles>(DEFAULT_ROLES);
+  const [hiddenIds, setHiddenIds] = useState<string[]>([]);
 
   // Hitung otomatis setiap kali data berubah (satu kali per signature agar galat tidak berulang tanpa henti).
   useEffect(() => {
@@ -61,9 +162,37 @@ export function Comparison() {
     void runComparison();
   }, [fresh, comparing, signature, runComparison]);
 
+  const rawResults = useMemo(() => comparison?.view.results ?? [], [comparison]);
+  const availableIds = useMemo(() => new Set(rawResults.map((item) => item.scenario_id)), [rawResults]);
+
+  const effectiveRoles = useMemo<ComparisonRoles>(() => ({
+    baselineId: resolveRoleId(roles.baselineId, DEFAULT_ROLES.baselineId, 0, rawResults, availableIds),
+    outageId: resolveRoleId(roles.outageId, DEFAULT_ROLES.outageId, 1, rawResults, availableIds),
+    mitigationId: resolveRoleId(roles.mitigationId, DEFAULT_ROLES.mitigationId, 2, rawResults, availableIds),
+  }), [roles, rawResults, availableIds]);
+
+  const visibleIds = useMemo(() => {
+    const hiddenSet = new Set(hiddenIds);
+    const active = rawResults.map((item) => item.scenario_id).filter((id) => !hiddenSet.has(id));
+    return active.length > 0 ? active : rawResults.map((item) => item.scenario_id);
+  }, [rawResults, hiddenIds]);
+
+  const displayed = useMemo(() => {
+    if (!comparison) return null;
+    return recomputeComparisonView(comparison.view, effectiveRoles, visibleIds);
+  }, [comparison, effectiveRoles, visibleIds]);
+
+  function handleToggleVisible(id: string, visible: boolean) {
+    setHiddenIds((prev) => {
+      if (visible) return prev.filter((item) => item !== id);
+      if (visibleIds.length <= 1 && visibleIds.includes(id)) return prev;
+      return prev.includes(id) ? prev : [...prev, id];
+    });
+  }
+
   function handleDownloadCsv() {
-    if (!fresh || !comparison) return;
-    downloadCsv("perbandingan-skenario.csv", comparisonToCsv(comparison.view));
+    if (!fresh || !displayed) return;
+    downloadCsv("perbandingan-skenario.csv", comparisonToCsv(displayed));
     notify.success("Berkas CSV perbandingan siap diunduh.");
   }
 
@@ -73,7 +202,7 @@ export function Comparison() {
         title="Perbandingan Skenario"
         action={
           <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-            {!comparing && fresh && (
+            {!comparing && fresh && displayed && (
               <Button type="button" variant="outline" onClick={handleDownloadCsv}>
                 <Download size={17} aria-hidden="true" /> Unduh CSV
               </Button>
@@ -89,7 +218,18 @@ export function Comparison() {
       <EstimateNotice />
       {comparing && <Busy label="Menghitung perbandingan skenario…" />}
       {!comparing && comparisonError && !fresh && <ErrorState message={comparisonError} retry={() => void runComparison()} />}
-      {!comparing && fresh && <ComparisonDetails outcome={comparison.view} />}
+      {!comparing && fresh && displayed && (
+        <>
+          <ComparisonControls
+            results={rawResults}
+            roles={effectiveRoles}
+            visibleIds={visibleIds}
+            onChangeRoles={setRoles}
+            onToggleVisible={handleToggleVisible}
+          />
+          <ComparisonDetails outcome={displayed} />
+        </>
+      )}
     </>
   );
 }
