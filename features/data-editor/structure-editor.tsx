@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput, NumberInput, TextInput } from "@/components/ui/number-input";
@@ -31,6 +32,15 @@ interface Props {
 const UNIT_KIND_LABEL: Record<UnitKind, string> = { mass: "Berat (g)", volume: "Volume (ml)", count: "Jumlah (pcs)" };
 const MOBILE_QUERY = "(max-width: 680px)";
 
+function OffersQuerySync({ onFocusOffers }: { onFocusOffers: () => void }) {
+  const searchParams = useSearchParams();
+  const focus = searchParams.get("focus");
+  useEffect(() => {
+    if (focus === "offers") onFocusOffers();
+  }, [focus, onFocusOffers]);
+  return null;
+}
+
 /**
  * Editor struktur usaha: pemasok, bahan, produk, resep, pengiriman, dan penawaran (tambah/ubah/hapus).
  * Stok, permintaan, dan batas pak ada di formulir parameter. Setiap perubahan langsung diterapkan dan
@@ -40,6 +50,19 @@ export function StructureEditor({ data, onChange }: Props) {
   const s = data.snapshot;
   // Di layar kecil panel dimulai tertutup agar halaman tidak terlalu panjang.
   const [openByDefault] = useState(() => typeof window === "undefined" || !window.matchMedia?.(MOBILE_QUERY).matches);
+  const offersRef = useRef<HTMLDetailsElement>(null);
+  const [offersOpen, setOffersOpen] = useState(openByDefault);
+  const [focusOffers, setFocusOffers] = useState(false);
+
+  const handleFocusOffers = useCallback(() => {
+    setOffersOpen(true);
+    setFocusOffers(true);
+  }, []);
+
+  useEffect(() => {
+    if (!focusOffers) return;
+    offersRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [focusOffers]);
 
   /** Terapkan perubahan eksplisit (tambah/hapus) beserta notifikasinya. */
   const commit = (next: WorkspaceData, message: string) => {
@@ -57,6 +80,9 @@ export function StructureEditor({ data, onChange }: Props) {
 
   return (
     <>
+      <Suspense fallback={null}>
+        <OffersQuerySync onFocusOffers={handleFocusOffers} />
+      </Suspense>
       <Panel title="Profil usaha" description="Nama, sektor, dan tanggal acuan perencanaan." open={openByDefault}>
         <div className="parameter-fields entity-fields">
           <TextInput label="Nama usaha" value={s.business.name} onCommit={(v) => patch((d) => void (d.snapshot.business.name = v), "Profil usaha diperbarui.")} />
@@ -189,7 +215,14 @@ export function StructureEditor({ data, onChange }: Props) {
         {(s.suppliers.length === 0 || s.materials.length === 0) && <p className="muted">Tambahkan pemasok dan bahan dulu sebelum membuat pengiriman.</p>}
       </Panel>
 
-      <Panel title="Penawaran alternatif" count={s.alternative_offers.length} description="Pembelian cadangan: batas pak diatur di formulir parameter di atas." open={openByDefault}>
+      <Panel
+        title="Penawaran alternatif"
+        count={s.alternative_offers.length}
+        description="Pembelian cadangan: batas pak diatur di formulir parameter di atas."
+        open={offersOpen}
+        onOpenChange={setOffersOpen}
+        panelRef={offersRef}
+      >
         <ul className="entity-list">
           {s.alternative_offers.map((o, i) => (
             <li key={o.id} className="entity-row entity-row-wide">
@@ -225,10 +258,39 @@ export function StructureEditor({ data, onChange }: Props) {
 }
 
 /** Panel akordeon: judul, jumlah item, dan chevron. Isi tetap ada di DOM saat tertutup. */
-function Panel({ title, description, count, tour, open: initiallyOpen, children }: { title: string; description: string; count?: number; tour?: string; open: boolean; children: ReactNode }) {
-  const [open, setOpen] = useState(initiallyOpen);
+function Panel({
+  title,
+  description,
+  count,
+  tour,
+  open: openProp,
+  onOpenChange,
+  panelRef,
+  children,
+}: {
+  title: string;
+  description: string;
+  count?: number;
+  tour?: string;
+  open: boolean;
+  onOpenChange?: (open: boolean) => void;
+  panelRef?: RefObject<HTMLDetailsElement | null>;
+  children: ReactNode;
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(openProp);
+  const open = onOpenChange ? openProp : uncontrolledOpen;
   return (
-    <details className="panel structure-panel" data-tour={tour} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details
+      ref={panelRef}
+      className="panel structure-panel"
+      data-tour={tour}
+      open={open}
+      onToggle={(event) => {
+        const next = event.currentTarget.open;
+        if (onOpenChange) onOpenChange(next);
+        else setUncontrolledOpen(next);
+      }}
+    >
       <summary className="panel-heading">
         <div>
           <h2>{title}{count !== undefined && <span className="count-badge">{count}</span>}</h2>

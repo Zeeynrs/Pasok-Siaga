@@ -192,3 +192,51 @@ export function updateScenario(data: WorkspaceData, next: ScenarioConfig): Works
   d.scenarios = d.scenarios.map((s) => (s.id === next.id ? next : s));
   return d;
 }
+
+export interface OutageScenarioPrep {
+  data: WorkspaceData;
+  scenarioId: string;
+  created: boolean;
+  fallbackUpdated: boolean;
+}
+
+/**
+ * Siapkan skenario uji gangguan pemasok tunggal: pakai yang sudah ada bila cocok,
+ * buat baru berbasis `baseline` jika kuota masih tersedia, atau perbarui `outage` saat penuh.
+ */
+export function prepareSupplierOutageScenario(data: WorkspaceData, supplierId: string): OutageScenarioPrep {
+  const existing = data.scenarios.find(
+    (s) =>
+      s.id !== "baseline" &&
+      s.disabled_supplier_ids.length === 1 &&
+      s.disabled_supplier_ids[0] === supplierId &&
+      s.enabled_offer_ids.length === 0,
+  );
+  if (existing) {
+    return { data, scenarioId: existing.id, created: false, fallbackUpdated: false };
+  }
+
+  const d = clone(data);
+  if (d.scenarios.length < MAX_SCENARIOS) {
+    const baseline = d.scenarios.find((s) => s.id === "baseline") ?? d.scenarios[0];
+    const supplierName = d.snapshot.suppliers.find((s) => s.id === supplierId)?.name ?? supplierId;
+    const name = `Uji Gagal: ${supplierName}`.slice(0, 100);
+    const id = slugify(name, d.scenarios.map((s) => s.id), "uji_gagal");
+    const created: ScenarioConfig = {
+      ...structuredClone(baseline),
+      id,
+      name,
+      disabled_supplier_ids: [supplierId],
+      enabled_offer_ids: [],
+      source: "user",
+    };
+    d.scenarios.push(created);
+    return { data: d, scenarioId: id, created: true, fallbackUpdated: false };
+  }
+
+  const outage = d.scenarios.find((s) => s.id === "outage") ?? d.scenarios[0];
+  outage.disabled_supplier_ids = [supplierId];
+  outage.enabled_offer_ids = [];
+  outage.disruptions = [];
+  return { data: d, scenarioId: outage.id, created: false, fallbackUpdated: true };
+}

@@ -3,10 +3,13 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { ChevronRight, List, Network, Search } from "lucide-react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import { Busy } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/workspace";
+import { prepareSupplierOutageScenario } from "@/lib/domain/mutations";
+import { notify } from "@/lib/notify";
 import type { NetworkEdge, NetworkKind, NetworkNode } from "@/lib/types";
 import { analyzeNetwork } from "@/lib/view-models";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -26,7 +29,21 @@ function subscribeMobile(notify: () => void) {
 const isMobile = () => window.matchMedia(mobileQuery).matches;
 const mobileOnServer = () => false;
 
-function NetworkDetail({ node, edges, allNodes }: { node?: NetworkNode; edges: NetworkEdge[]; allNodes: NetworkNode[] }) {
+function NetworkDetail({
+  node,
+  edges,
+  allNodes,
+  onTestSupplierFailure,
+  onAddBackupOffer,
+  onOpenSimulator,
+}: {
+  node?: NetworkNode;
+  edges: NetworkEdge[];
+  allNodes: NetworkNode[];
+  onTestSupplierFailure: (supplierId: string) => void;
+  onAddBackupOffer: () => void;
+  onOpenSimulator: () => void;
+}) {
   const links = node ? edges.filter((edge) => edge.source === node.id || edge.target === node.id) : [];
   return (
     <section className="panel network-detail" aria-label="Detail hubungan" aria-live="polite">
@@ -40,6 +57,28 @@ function NetworkDetail({ node, edges, allNodes }: { node?: NetworkNode; edges: N
           const related = allNodes.find(({ id }) => id === (edge.source === node.id ? edge.target : edge.source));
           return <li key={edge.id}><strong>{related?.label}</strong><small>{edgeLabel[edge.kind]}{!edge.active && " · Tidak aktif"}</small></li>;
         })}</ul> : <p className="muted">Belum ada hubungan pemasok atau produk.</p>}
+        <div className="action-row" style={{ marginTop: "14px", justifyContent: "flex-start" }}>
+          {node.kind === "supplier" && (
+            <Button type="button" size="sm" onClick={() => onTestSupplierFailure(node.entity_id)}>
+              Uji jika pemasok ini gagal
+            </Button>
+          )}
+          {node.kind === "material" && (
+            <>
+              <Button type="button" size="sm" onClick={onAddBackupOffer}>
+                Tambah pemasok cadangan
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={onOpenSimulator}>
+                Buka Simulator
+              </Button>
+            </>
+          )}
+          {node.kind === "product" && (
+            <Button type="button" size="sm" onClick={onOpenSimulator}>
+              Simulasikan produksi
+            </Button>
+          )}
+        </div>
       </div>}
     </section>
   );
@@ -57,7 +96,8 @@ function NodeList({ nodes, edges, selected, onSelect }: { nodes: NetworkNode[]; 
 }
 
 export function SupplyNetwork() {
-  const { scenarios, snapshot, scenario, selectScenario } = useWorkspace();
+  const router = useRouter();
+  const { data, setData, scenarios, snapshot, scenario, selectScenario, href } = useWorkspace();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<NetworkKind | "all">("all");
   const [view, setView] = useState<"list" | "graph">();
@@ -72,6 +112,20 @@ export function SupplyNetwork() {
   const visibleIds = new Set(nodes.map((node) => node.id));
   const edges = allEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
   const activeNode = nodes.find(({ id }) => id === selected);
+
+  function handleTestSupplierFailure(supplierId: string) {
+    const prep = prepareSupplierOutageScenario(data, supplierId);
+    if (prep.created || prep.fallbackUpdated) {
+      setData(prep.data);
+      notify.success(
+        prep.created
+          ? "Skenario uji gagal pemasok disiapkan."
+          : "Skenario gangguan diperbarui untuk menguji pemasok ini.",
+      );
+    }
+    selectScenario(prep.scenarioId);
+    router.push(href("/simulator"));
+  }
 
   return (
     <>
@@ -95,7 +149,14 @@ export function SupplyNetwork() {
             : <div className="panel-body muted" role="status">{allNodes.length === 0 ? "Belum ada pemasok, bahan, atau produk. Tambahkan di Data Usaha untuk melihat jaringan." : "Tidak ada node yang cocok. Coba ubah pencarian atau filter."}</div>}
           <div className="network-legend"><span><i className="legend-committed" />Pengiriman terjadwal</span><span><i className="legend-alternative" />Penawaran alternatif</span><span><i className="legend-bom" />Kebutuhan produksi</span><span><i className="legend-inactive" />Tidak aktif</span></div>
         </section>
-        <NetworkDetail node={activeNode} edges={allEdges} allNodes={allNodes} />
+        <NetworkDetail
+          node={activeNode}
+          edges={allEdges}
+          allNodes={allNodes}
+          onTestSupplierFailure={handleTestSupplierFailure}
+          onAddBackupOffer={() => router.push(href("/data?focus=offers"))}
+          onOpenSimulator={() => router.push(href("/simulator"))}
+        />
       </div>
       <WarningList entries={network.warnings} />
     </>

@@ -25,6 +25,7 @@ vi.mock("@/lib/supabase/client", () => ({ createClient: () => ({ auth: { signOut
 import { Workspace } from "@/components/workspace";
 import { Dashboard } from "@/features/dashboard/dashboard";
 import { DataEditor } from "@/features/data-editor/data-editor";
+import { SupplyNetwork } from "@/features/network/supply-network";
 import { Comparison } from "@/features/simulation/comparison";
 import { Simulator } from "@/features/simulation/simulator";
 import { notify } from "@/lib/notify";
@@ -55,6 +56,7 @@ async function handler(url: string, init?: RequestInit): Promise<Response> {
 beforeEach(() => {
   searchQuery = "";
   replace.mockReset();
+  router.push.mockReset();
   for (const fn of Object.values(notify)) vi.mocked(fn).mockReset();
   sessionStorage.clear();
   localStorage.clear();
@@ -340,5 +342,100 @@ describe("Perbandingan antar skenario kustom", () => {
     expect(csv).toContain("100%");
     expect(csv).not.toContain("Pemasok Utama Gagal");
     expect(compareCalls()).toBe(1);
+  });
+});
+
+describe("Aksi cepat dari Jaringan Pasok", () => {
+  it("tests supplier failure from SupplyNetwork detail, creates/selects outage scenario, and navigates to simulator", async () => {
+    const user = userEvent.setup();
+    function NetworkToSimHarness() {
+      const [page, setPage] = useState<"network" | "simulator">("network");
+      return (
+        <Workspace mode="demo">
+          <button type="button" onClick={() => setPage("simulator")}>Buka Halaman Simulator</button>
+          {page === "network" ? <SupplyNetwork /> : <Simulator />}
+        </Workspace>
+      );
+    }
+
+    render(<NetworkToSimHarness />);
+    await screen.findByRole("heading", { level: 1 });
+
+    await user.click(screen.getByRole("button", { name: "Daftar" }));
+    await user.click(screen.getByRole("button", { name: /Pemasok B/ }));
+
+    const detail = screen.getByRole("region", { name: "Detail hubungan" });
+    const testBtn = within(detail).getByRole("button", { name: "Uji jika pemasok ini gagal" });
+    await user.click(testBtn);
+
+    expect(router.push).toHaveBeenCalledWith("/simulator");
+
+    await user.click(screen.getByRole("button", { name: "Buka Halaman Simulator" }));
+    expect(screen.getByRole("radio", { name: "Uji Gagal: Pemasok B" })).toBeChecked();
+  });
+
+  it("shows backup offer and simulator quick actions on material node and navigates to /data?focus=offers", async () => {
+    const user = userEvent.setup();
+    render(
+      <Workspace mode="demo">
+        <SupplyNetwork />
+      </Workspace>,
+    );
+    await screen.findByRole("heading", { level: 1 });
+
+    await user.click(screen.getByRole("button", { name: "Daftar" }));
+    await user.click(screen.getByRole("button", { name: /Tepung terigu/ }));
+
+    const detail = screen.getByRole("region", { name: "Detail hubungan" });
+    const backupBtn = within(detail).getByRole("button", { name: "Tambah pemasok cadangan" });
+    const simBtn = within(detail).getByRole("button", { name: "Buka Simulator" });
+    expect(backupBtn).toBeInTheDocument();
+    expect(simBtn).toBeInTheDocument();
+
+    await user.click(backupBtn);
+    expect(router.push).toHaveBeenCalledWith("/data?focus=offers");
+
+    await user.click(simBtn);
+    expect(router.push).toHaveBeenCalledWith("/simulator");
+  });
+
+  it("shows Simulasikan produksi on product node and navigates to /simulator", async () => {
+    const user = userEvent.setup();
+    render(
+      <Workspace mode="demo">
+        <SupplyNetwork />
+      </Workspace>,
+    );
+    await screen.findByRole("heading", { level: 1 });
+
+    await user.click(screen.getByRole("button", { name: "Daftar" }));
+    await user.click(screen.getByRole("button", { name: /Roti/ }));
+
+    const detail = screen.getByRole("region", { name: "Detail hubungan" });
+    const simBtn = within(detail).getByRole("button", { name: "Simulasikan produksi" });
+    await user.click(simBtn);
+    expect(router.push).toHaveBeenCalledWith("/simulator");
+  });
+
+  it("opens Penawaran alternatif panel in StructureEditor when focus=offers even on mobile without scrollIntoView", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query.includes("max-width"),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    searchQuery = "focus=offers";
+
+    render(
+      <Workspace mode="demo">
+        <DataEditor />
+      </Workspace>,
+    );
+    await screen.findByRole("heading", { level: 1 });
+
+    const offersDetails = screen.getByRole("heading", { name: /Penawaran alternatif/ }).closest("details");
+    const suppliersDetails = document.querySelector('[data-tour="structure"]');
+    expect(offersDetails).toHaveAttribute("open");
+    expect(suppliersDetails).not.toHaveAttribute("open");
   });
 });

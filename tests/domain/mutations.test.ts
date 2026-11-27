@@ -7,6 +7,7 @@ import {
   addProduct,
   addScenario,
   addSupplier,
+  prepareSupplierOutageScenario,
   removeAlternativeOffer,
   removeCommittedDelivery,
   removeMaterial,
@@ -137,5 +138,46 @@ describe("scenario mutations", () => {
     expect(removeScenario(d, "baseline").scenarios).toHaveLength(3);
     const withCustom = addScenario(d, "baseline", "Kustom");
     expect(removeScenario(withCustom, "kustom").scenarios).toHaveLength(3);
+  });
+
+  it("prepareSupplierOutageScenario creates a new scenario based on baseline when none matches and scenarios < MAX_SCENARIOS", () => {
+    const original = fresh();
+    const prep = prepareSupplierOutageScenario(original, "supplier_b");
+    expect(prep.created).toBe(true);
+    expect(prep.fallbackUpdated).toBe(false);
+    expect(prep.data.scenarios).toHaveLength(4);
+    const created = prep.data.scenarios.find((s) => s.id === prep.scenarioId);
+    expect(created).toMatchObject({
+      name: "Uji Gagal: Pemasok B",
+      disabled_supplier_ids: ["supplier_b"],
+      enabled_offer_ids: [],
+      source: "user",
+    });
+    expect(original.scenarios).toHaveLength(3);
+    expect(() => validateWorkspaceData(prep.data)).not.toThrow();
+  });
+
+  it("prepareSupplierOutageScenario reuses an existing non-baseline scenario matching [supplierId] with empty offers", () => {
+    const prep = prepareSupplierOutageScenario(fresh(), "supplier_a");
+    expect(prep.created).toBe(false);
+    expect(prep.fallbackUpdated).toBe(false);
+    expect(prep.scenarioId).toBe("outage");
+    expect(prep.data.scenarios).toHaveLength(3);
+    expect(() => validateWorkspaceData(prep.data)).not.toThrow();
+  });
+
+  it("prepareSupplierOutageScenario updates outage scenario when MAX_SCENARIOS is reached and no match exists", () => {
+    let d = fresh();
+    for (let i = 0; i < 7; i++) d = addScenario(d, "baseline", `Tambahan ${i}`);
+    expect(d.scenarios).toHaveLength(10);
+
+    const prep = prepareSupplierOutageScenario(d, "supplier_b");
+    expect(prep.created).toBe(false);
+    expect(prep.fallbackUpdated).toBe(true);
+    expect(prep.scenarioId).toBe("outage");
+    expect(prep.data.scenarios).toHaveLength(10);
+    expect(prep.data.scenarios.find((s) => s.id === "outage")!.disabled_supplier_ids).toEqual(["supplier_b"]);
+    expect(prep.data.scenarios.find((s) => s.id === "outage")!.enabled_offer_ids).toEqual([]);
+    expect(() => validateWorkspaceData(prep.data)).not.toThrow();
   });
 });
