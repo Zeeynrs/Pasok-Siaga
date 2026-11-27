@@ -1,8 +1,13 @@
-import { CircleAlert, Info } from "lucide-react";
+"use client";
+
+import { CircleAlert, Copy, Download, ExternalLink, Info } from "lucide-react";
 import type { ReactNode } from "react";
 import { EstimateNotice } from "@/components/states";
+import { Button } from "@/components/ui/button";
+import { buildWhatsAppShareUrl, copyText, downloadCsv, formatWhatsAppOrderMessage, simulationToCsv } from "@/lib/export";
 import { formatDate, formatMoney, formatNumber, formatQuantity } from "@/lib/format";
 import type { WorkspaceSnapshot as Snapshot } from "@/lib/domain/types";
+import { notify } from "@/lib/notify";
 import type { SimulationResult, SolverStatus } from "@/lib/types";
 
 const statusText: Record<SolverStatus, { label: string; tone: string }> = {
@@ -32,9 +37,47 @@ export function SimulationResults({ result, snapshot }: { result: SimulationResu
   const { kpis } = result;
   const suppliers = new Map(snapshot.suppliers.map((item) => [item.id, item.name]));
   const materials = new Map(snapshot.materials.map((item) => [item.id, item]));
+  const hasPurchases = result.purchases.some((item) => item.packs > 0);
+  const waMessage = kpis ? formatWhatsAppOrderMessage(result, snapshot) : "";
+
+  async function handleCopy() {
+    const copied = await copyText(waMessage);
+    if (copied) {
+      notify.success(
+        hasPurchases
+          ? "Pesan order WhatsApp disalin ke papan klip."
+          : "Ringkasan rencana produksi disalin ke papan klip.",
+      );
+    } else {
+      notify.error("Gagal menyalin teks ke papan klip.");
+    }
+  }
+
+  function handleDownloadCsv() {
+    downloadCsv(`simulasi-${result.scenario_id}.csv`, simulationToCsv(result, snapshot));
+    notify.success("Berkas CSV simulasi siap diunduh.");
+  }
+
   return (
     <div className="results" aria-label="Hasil Simulasi">
       <header className="results-heading"><div><h2>Hasil Simulasi</h2><p>Batas waktu pasokan {formatDate(result.cutoff_date)}</p></div><SolverLabel status={result.solver_status} /></header>
+      {kpis && (
+        <div className="results-actions" role="group" aria-label="Aksi hasil simulasi" style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+          <Button type="button" variant="outline" size="sm" onClick={() => void handleCopy()}>
+            <Copy size={16} aria-hidden="true" /> {hasPurchases ? "Salin Pesan Order (WA)" : "Salin Ringkasan"}
+          </Button>
+          {hasPurchases && (
+            <Button asChild variant="outline" size="sm">
+              <a href={buildWhatsAppShareUrl(waMessage)} target="_blank" rel="noopener noreferrer">
+                <ExternalLink size={16} aria-hidden="true" /> Buka WhatsApp
+              </a>
+            </Button>
+          )}
+          <Button type="button" variant="outline" size="sm" onClick={handleDownloadCsv}>
+            <Download size={16} aria-hidden="true" /> Unduh CSV
+          </Button>
+        </div>
+      )}
       <EstimateNotice />
       <WarningList entries={result.warnings} />
       {kpis && <>

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DAPUR_SARI_FALLBACK_FIXTURE, EMPTY_WORKSPACE_FIXTURE } from "@/lib/domain/fixture";
@@ -24,6 +24,8 @@ vi.mock("@/lib/supabase/client", () => ({ createClient: () => ({ auth: { signOut
 import { Workspace } from "@/components/workspace";
 import { Dashboard } from "@/features/dashboard/dashboard";
 import { DataEditor } from "@/features/data-editor/data-editor";
+import { Comparison } from "@/features/simulation/comparison";
+import { Simulator } from "@/features/simulation/simulator";
 import { notify } from "@/lib/notify";
 import { resetStoredValues } from "@/lib/use-stored-value";
 
@@ -69,6 +71,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -135,5 +138,102 @@ describe("Template starter sektor kuliner", () => {
     );
     await screen.findByRole("heading", { level: 1 });
     expect(screen.getByRole("button", { name: "Pakai template Kedai Kopi Susu" })).toBeInTheDocument();
+  });
+});
+
+describe("Salin pesan WhatsApp & ekspor CSV", () => {
+  it("shows WhatsApp order copy, Buka WhatsApp link, and CSV download after mitigation simulation", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(
+      <Workspace mode="demo">
+        <Simulator />
+      </Workspace>,
+    );
+    await screen.findByRole("heading", { level: 1 });
+
+    await user.click(screen.getByRole("radio", { name: "Mitigasi: Pemasok Alternatif Aktif" }));
+    await user.click(screen.getByRole("button", { name: "Jalankan Simulasi" }));
+    await screen.findByRole("heading", { name: "Hasil Simulasi" });
+
+    const copyBtn = screen.getByRole("button", { name: "Salin Pesan Order (WA)" });
+    const waLink = screen.getByRole("link", { name: "Buka WhatsApp" });
+    const csvBtn = screen.getByRole("button", { name: "Unduh CSV" });
+
+    expect(copyBtn).toBeInTheDocument();
+    expect(waLink).toHaveAttribute("href", expect.stringMatching(/^https:\/\/wa\.me\/\?text=/));
+    expect(csvBtn).toBeInTheDocument();
+
+    await user.click(copyBtn);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0][0]).toContain("Pemasok B");
+    expect(notify.success).toHaveBeenCalled();
+  });
+
+  it("uses Salin Ringkasan without Buka WhatsApp link on Normal scenario", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.fn(() => "blob:sim-csv");
+    const revokeObjectURL = vi.fn();
+    const BaseURL = globalThis.URL;
+    class StubURL extends BaseURL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    }
+    vi.stubGlobal("URL", StubURL);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    render(
+      <Workspace mode="demo">
+        <Simulator />
+      </Workspace>,
+    );
+    await screen.findByRole("heading", { level: 1 });
+
+    await user.click(screen.getByRole("radio", { name: "Normal" }));
+    await user.click(screen.getByRole("button", { name: "Jalankan Simulasi" }));
+    await screen.findByRole("heading", { name: "Hasil Simulasi" });
+
+    expect(screen.getByRole("button", { name: "Salin Ringkasan" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Buka WhatsApp" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Unduh CSV" }));
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders Unduh CSV on Comparison and triggers CSV download", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.fn(() => "blob:comp-csv");
+    const revokeObjectURL = vi.fn();
+    const BaseURL = globalThis.URL;
+    class StubURL extends BaseURL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    }
+    vi.stubGlobal("URL", StubURL);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    render(
+      <Workspace mode="demo">
+        <Comparison />
+      </Workspace>,
+    );
+    await screen.findByText("Persentase pemulihan");
+
+    const csvBtn = screen.getByRole("button", { name: "Unduh CSV" });
+    await user.click(csvBtn);
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    const blob = (createObjectURL.mock.calls[0] as unknown[])[0] as Blob;
+    expect(blob).toBeInstanceOf(Blob);
+    const text = await blob.text();
+    expect(text).toContain("Normal");
+    expect(text).toContain("55%");
   });
 });

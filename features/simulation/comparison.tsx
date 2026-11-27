@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Info, Play } from "lucide-react";
+import { Download, Info, Play } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Busy, ErrorState, EstimateNotice } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/workspace";
+import { comparisonToCsv, downloadCsv } from "@/lib/export";
 import { formatMoney, formatPercent } from "@/lib/format";
+import { notify } from "@/lib/notify";
 import type { ComparisonResult } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace-context";
 import { SolverLabel, WarningList } from "./results";
@@ -59,9 +61,29 @@ export function Comparison() {
     void runComparison();
   }, [fresh, comparing, signature, runComparison]);
 
+  function handleDownloadCsv() {
+    if (!fresh || !comparison) return;
+    downloadCsv("perbandingan-skenario.csv", comparisonToCsv(comparison.view));
+    notify.success("Berkas CSV perbandingan siap diunduh.");
+  }
+
   return (
     <>
-      <PageHeader title="Perbandingan Skenario" action={<Button asChild variant="outline"><Link href={href("/simulator")}><Play size={17} aria-hidden="true" /> Buka Simulator</Link></Button>}>
+      <PageHeader
+        title="Perbandingan Skenario"
+        action={
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+            {!comparing && fresh && (
+              <Button type="button" variant="outline" onClick={handleDownloadCsv}>
+                <Download size={17} aria-hidden="true" /> Unduh CSV
+              </Button>
+            )}
+            <Button asChild variant="outline">
+              <Link href={href("/simulator")}><Play size={17} aria-hidden="true" /> Buka Simulator</Link>
+            </Button>
+          </div>
+        }
+      >
         Bandingkan kondisi normal, gangguan, dan mitigasi berdasarkan input sesi ini.
       </PageHeader>
       <EstimateNotice />
