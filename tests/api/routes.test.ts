@@ -26,6 +26,7 @@ import * as repo from "@/lib/supabase/workspace-repo";
 import { GET as getDemo } from "@/app/api/demo/route";
 import { POST as simulate } from "@/app/api/simulate/route";
 import { POST as compare } from "@/app/api/simulate/compare/route";
+import { POST as stressTest } from "@/app/api/simulate/stress-test/route";
 import { GET as getWorkspace, PUT as putWorkspace } from "@/app/api/workspace/route";
 import { POST as resetWorkspace } from "@/app/api/workspace/reset/route";
 import { GET as authCallback } from "@/app/auth/callback/route";
@@ -94,6 +95,64 @@ describe("POST /api/simulate/compare", () => {
     const { snapshot, scenarios } = fresh();
     const res = await compare(post("/api/simulate/compare", { snapshot, scenarios: scenarios.slice(0, 2) }));
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/simulate/stress-test", () => {
+  it("returns 200 with stress_test and inputs_signature for Dapur Sari", async () => {
+    const { snapshot, scenarios } = fresh();
+    const res = await stressTest(post("/api/simulate/stress-test", { snapshot, scenarios }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.stress_test.critical_delay_days).toBe(2);
+    expect(body.stress_test.offer_breakevens[0].max_viable_premium_idr).toBe(11_999);
+    expect(body.inputs_signature).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("handles optional delayScenarioId and offerScenarioId safely", async () => {
+    const { snapshot, scenarios } = fresh();
+    const okRes = await stressTest(
+      post("/api/simulate/stress-test", {
+        snapshot,
+        scenarios,
+        delayScenarioId: "tidak_dikenal",
+        offerScenarioId: "mitigation",
+      }),
+    );
+    expect(okRes.status).toBe(200);
+
+    const badSlugRes = await stressTest(
+      post("/api/simulate/stress-test", {
+        snapshot,
+        scenarios,
+        delayScenarioId: "bad id!",
+      }),
+    );
+    expect(badSlugRes.status).toBe(400);
+    expect((await badSlugRes.json()).error).toMatch(/tidak valid/i);
+  });
+
+  it("returns 400 in Indonesian for malformed JSON, missing fields, or negative stock", async () => {
+    const badJson = await stressTest(post("/api/simulate/stress-test", "{not json"));
+    expect(badJson.status).toBe(400);
+    expect((await badJson.json()).error).toMatch(/tidak valid/i);
+
+    const incomplete = await stressTest(post("/api/simulate/stress-test", { snapshot: fresh().snapshot }));
+    expect(incomplete.status).toBe(400);
+    expect((await incomplete.json()).error).toMatch(/tidak lengkap/i);
+
+    const neg = fresh();
+    neg.snapshot.materials[0].stock_on_hand = -5;
+    const negRes = await stressTest(post("/api/simulate/stress-test", neg));
+    expect(negRes.status).toBe(400);
+    const negBody = await negRes.json();
+    expect(negBody.error).toMatch(/tidak valid/i);
+    expect(JSON.stringify(negBody)).not.toMatch(/at .*\.(ts|js)|stack/i);
+  });
+
+  it("rejects oversized bodies with 413", async () => {
+    const res = await stressTest(post("/api/simulate/stress-test", JSON.stringify({ pad: "x".repeat(2_000_000) })));
+    expect(res.status).toBe(413);
   });
 });
 

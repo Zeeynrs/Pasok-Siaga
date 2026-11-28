@@ -1,4 +1,5 @@
 import type { ScenarioConfig, ScenarioResult, WorkspaceData, WorkspaceSnapshot, ComparisonSummary } from "@/lib/domain/types";
+import type { StressTestResult } from "@/lib/solver/stress-test";
 import type { ComparisonResult, SimulationResult } from "@/lib/types";
 import { toComparisonView, toSimulationView } from "@/lib/view-models";
 
@@ -53,4 +54,23 @@ export async function compareAll(data: WorkspaceData, signal?: AbortSignal): Pro
     signal,
   );
   return toComparisonView(results, data.scenarios, data.snapshot);
+}
+
+/** Jalankan uji ketahanan & titik impas premi penawaran (POST /api/simulate/stress-test). */
+export async function runStressTestPreview(
+  data: WorkspaceData,
+  options?: { delayScenarioId?: string; offerScenarioId?: string },
+  signal?: AbortSignal,
+): Promise<StressTestResult> {
+  const { stress_test } = await request<{ stress_test: StressTestResult }>(
+    "/api/simulate/stress-test",
+    postJson({
+      snapshot: data.snapshot,
+      scenarios: data.scenarios,
+      delayScenarioId: options?.delayScenarioId,
+      offerScenarioId: options?.offerScenarioId,
+    }),
+    signal,
+  );
+  return stress_test;
 }
