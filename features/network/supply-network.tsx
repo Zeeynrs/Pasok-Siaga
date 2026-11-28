@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChevronRight, List, Network, Search } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
@@ -52,10 +52,25 @@ function NetworkDetail({
         <h3>{node.label}</h3>
         <p className="muted">{node.detail}</p>
         <span className={`tag tag-${statusLabel[node.status]?.tone ?? "neutral"}`}>{statusLabel[node.status]?.label ?? node.status}</span>
+        {node.overlay && (
+          <div className={`detail-overlay detail-overlay-${node.overlay.tone}`}>
+            <span className={`tag tag-${node.overlay.tone}`}>{node.overlay.badge}</span>
+            <strong>{node.overlay.metric}</strong>
+          </div>
+        )}
         <h4>Hubungan</h4>
         {links.length ? <ul className="node-links">{links.map((edge) => {
           const related = allNodes.find(({ id }) => id === (edge.source === node.id ? edge.target : edge.source));
-          return <li key={edge.id}><strong>{related?.label}</strong><small>{edgeLabel[edge.kind]}{!edge.active && " · Tidak aktif"}</small></li>;
+          return (
+            <li key={edge.id}>
+              <strong>{related?.label}</strong>
+              <small>
+                {edgeLabel[edge.kind]}
+                {!edge.active && " · Tidak aktif"}
+                {edge.used && edge.overlayLabel ? ` · Dipakai ${edge.overlayLabel}` : ""}
+              </small>
+            </li>
+          );
         })}</ul> : <p className="muted">Belum ada hubungan pemasok atau produk.</p>}
         <div className="detail-actions">
           {node.kind === "supplier" && (
@@ -89,7 +104,15 @@ function NodeList({ nodes, edges, selected, onSelect }: { nodes: NetworkNode[]; 
     const related = edges.filter((edge) => edge.source === node.id || edge.target === node.id).length;
     return <button type="button" key={node.id} aria-pressed={selected === node.id} onClick={() => onSelect(node.id)}>
       <div><strong>{node.label}</strong><small>{kindLabel[node.kind]} · {related} hubungan</small></div>
-      <span className={`tag tag-${statusLabel[node.status]?.tone ?? "neutral"}`}>{statusLabel[node.status]?.label ?? node.status}</span>
+      <div className="node-list-tags">
+        <span className={`tag tag-${statusLabel[node.status]?.tone ?? "neutral"}`}>{statusLabel[node.status]?.label ?? node.status}</span>
+        {node.overlay && (
+          <span className={`tag tag-${node.overlay.tone} node-overlay-tag`}>
+            <span>{node.overlay.badge}</span>
+            <span>{node.overlay.metric}</span>
+          </span>
+        )}
+      </div>
       <ChevronRight size={17} aria-hidden="true" />
     </button>;
   })}</div>;
@@ -97,14 +120,28 @@ function NodeList({ nodes, edges, selected, onSelect }: { nodes: NetworkNode[]; 
 
 export function SupplyNetwork() {
   const router = useRouter();
-  const { data, setData, scenarios, snapshot, scenario, selectScenario, href } = useWorkspace();
+  const { data, setData, scenarios, snapshot, scenario, selectScenario, href, signature, comparison, comparing, runComparison } = useWorkspace();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<NetworkKind | "all">("all");
   const [view, setView] = useState<"list" | "graph">();
   const [selected, setSelected] = useState<string>();
+  const [showOverlay, setShowOverlay] = useState(true);
+  const attempted = useRef<string | null>(null);
   const smallScreen = useSyncExternalStore(subscribeMobile, isMobile, mobileOnServer);
   const activeView = view ?? (smallScreen ? "list" : "graph");
-  const network = useMemo(() => analyzeNetwork(snapshot, scenario), [snapshot, scenario]);
+  const isEmpty = snapshot.suppliers.length === 0 && snapshot.materials.length === 0 && snapshot.products.length === 0;
+  const fresh = comparison !== null && comparison.signature === signature;
+
+  useEffect(() => {
+    if (isEmpty || fresh || comparing || attempted.current === signature) return;
+    attempted.current = signature;
+    void runComparison();
+  }, [isEmpty, fresh, comparing, signature, runComparison]);
+
+  const activeSimulation = showOverlay && fresh
+    ? comparison.view.results.find((result) => result.scenario_id === scenario.id) ?? null
+    : null;
+  const network = useMemo(() => analyzeNetwork(snapshot, scenario, activeSimulation), [snapshot, scenario, activeSimulation]);
   const matching = query.trim().toLocaleLowerCase("id-ID");
   const allNodes = network.nodes;
   const allEdges = network.edges;
@@ -138,6 +175,14 @@ export function SupplyNetwork() {
             <div className="network-filters">
               <label className="search-field"><Search size={17} aria-hidden="true" /><span className="sr-only">Cari node</span><Input type="search" placeholder="Cari pemasok, bahan, produk…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
               <label><span className="sr-only">Filter jenis node</span><select value={kind} onChange={(event) => setKind(event.target.value as NetworkKind | "all")}><option value="all">Semua jenis</option><option value="supplier">Pemasok</option><option value="material">Bahan</option><option value="product">Produk</option></select></label>
+              <label className="filter-chip network-overlay-toggle">
+                <input
+                  type="checkbox"
+                  checked={showOverlay}
+                  onChange={(event) => setShowOverlay(event.target.checked)}
+                />
+                <span>Tampilkan Dampak Simulasi</span>
+              </label>
             </div>
             <div className="view-toggle" role="group" aria-label="Tampilan jaringan">
               <Button type="button" size="sm" variant="ghost" aria-pressed={activeView === "graph"} onClick={() => setView("graph")}><Network size={16} aria-hidden="true" /> Graf</Button>

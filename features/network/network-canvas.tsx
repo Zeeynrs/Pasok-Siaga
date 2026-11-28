@@ -15,11 +15,24 @@ type FlowNode = Node<{ item: NetworkNode }, "supply">;
 function SupplyNode({ data: { item }, selected }: NodeProps<FlowNode>) {
   const Icon = icons[item.kind];
   const status = statusLabel[item.status];
+  const isBottleneck = item.kind === "material" && item.overlay?.tone === "bad";
   return (
-    <div className={`flow-node flow-${item.kind}${selected ? " flow-selected" : ""}`} title={item.detail}>
+    <div
+      className={`flow-node flow-${item.kind}${selected ? " flow-selected" : ""}${isBottleneck ? " flow-bottleneck" : ""}`}
+      title={item.detail}
+    >
       {item.kind !== "supplier" && <Handle className="flow-handle" type="target" position={Position.Left} isConnectable={false} />}
       <Icon size={18} className="flow-icon" aria-hidden="true" />
-      <div><strong>{item.label}</strong><small className={`flow-status ${status?.tone ?? ""}`}>{status?.label ?? item.status}</small></div>
+      <div className="flow-node-body">
+        <strong>{item.label}</strong>
+        <small className={`flow-status ${status?.tone ?? ""}`}>{status?.label ?? item.status}</small>
+        {item.overlay && (
+          <span className={`flow-overlay-pill tag tag-${item.overlay.tone}`}>
+            <span>{item.overlay.badge}</span>
+            <span>{item.overlay.metric}</span>
+          </span>
+        )}
+      </div>
       {item.kind !== "product" && <Handle className="flow-handle" type="source" position={Position.Right} isConnectable={false} />}
     </div>
   );
@@ -40,7 +53,10 @@ export function NetworkCanvas({ nodes, edges, selected, onSelect }: {
   const groups = kinds.map((kind) => nodes.filter((node) => node.kind === kind));
   const maxRows = Math.max(...groups.map((group) => group.length));
   const flowNodes = groups.flatMap((group, column) => group.map((item, row): FlowNode => ({
-    id: item.id, type: "supply", data: { item }, ariaLabel: `${item.label}, ${kindLabel[item.kind].toLowerCase()}`,
+    id: item.id,
+    type: "supply",
+    data: { item },
+    ariaLabel: `${item.label}, ${kindLabel[item.kind].toLowerCase()}${item.overlay ? `, ${item.overlay.badge}, ${item.overlay.metric}` : ""}`,
     position: { x: column * 254, y: row * 105 + ((maxRows - group.length) * 105) / 2 },
     selected: selected === item.id,
   })));
@@ -48,9 +64,14 @@ export function NetworkCanvas({ nodes, edges, selected, onSelect }: {
     const stroke = item.active ? line[item.kind] : "#adb8b0";
     return {
       id: item.id, source: item.source, target: item.target, type: "smoothstep", selectable: false,
-      ariaLabel: `${edgeLabel[item.kind]}${item.active ? "" : ", tidak aktif"}`,
+      label: item.used ? item.overlayLabel : undefined,
+      ariaLabel: `${edgeLabel[item.kind]}${item.active ? "" : ", tidak aktif"}${item.used && item.overlayLabel ? `, dipakai ${item.overlayLabel}` : ""}`,
       markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
-      style: { stroke, strokeWidth: 1.6, strokeDasharray: item.kind === "alternative" || !item.active ? "5 5" : undefined },
+      style: {
+        stroke,
+        strokeWidth: item.used ? 2.6 : 1.6,
+        strokeDasharray: item.used ? undefined : item.kind === "alternative" || !item.active ? "5 5" : undefined,
+      },
     };
   });
 

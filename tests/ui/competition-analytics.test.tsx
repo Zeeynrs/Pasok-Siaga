@@ -9,8 +9,16 @@ import { compareScenarios } from "@/lib/solver/compare";
 import { solveScenario } from "@/lib/solver/milp-solver";
 import { runStressTest } from "@/lib/solver/stress-test";
 
+import type { NetworkEdge, NetworkNode } from "@/lib/types";
+
 vi.mock("@/lib/notify", () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), changed: vi.fn() } }));
-vi.mock("@/features/network/network-canvas", () => ({ NetworkCanvas: () => <div data-testid="graph-canvas" /> }));
+const networkCanvasSpy = vi.fn();
+vi.mock("@/features/network/network-canvas", () => ({
+  NetworkCanvas: (props: { nodes: NetworkNode[]; edges: NetworkEdge[]; selected?: string; onSelect: (id: string | undefined) => void }) => {
+    networkCanvasSpy(props);
+    return <div data-testid="graph-canvas" data-nodes={props.nodes.length} />;
+  },
+}));
 vi.mock("@/features/simulation/comparison-chart", () => ({ ComparisonChart: () => <div data-testid="chart" /> }));
 
 const delayChartSpy = vi.fn();
@@ -36,7 +44,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/supabase/client", () => ({ createClient: () => ({ auth: { signOut: vi.fn().mockResolvedValue({}) } }) }));
 
 import { Workspace } from "@/components/workspace";
+import { Dashboard } from "@/features/dashboard/dashboard";
 import { DataEditor } from "@/features/data-editor/data-editor";
+import { SupplyNetwork } from "@/features/network/supply-network";
 import { Comparison } from "@/features/simulation/comparison";
 import { StressTestPanel } from "@/features/simulation/stress-test-panel";
 import { notify } from "@/lib/notify";
@@ -78,6 +88,7 @@ const countCalls = (url: string) => calls.filter((c) => c.url === url).length;
 
 beforeEach(() => {
   calls = [];
+  networkCanvasSpy.mockReset();
   delayChartSpy.mockReset();
   premiumChartSpy.mockReset();
   replace.mockReset();
@@ -265,5 +276,145 @@ describe("StressTestPanel di halaman Comparison", () => {
 
     expect(await screen.findByText(/Belum ada pengiriman terjadwal aktif/i)).toBeInTheDocument();
     expect(screen.getByText(/Belum ada penawaran alternatif/i)).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard Skor Ketahanan Pasokan", () => {
+  it("loads compareAll once in demo mode and renders Skor Ketahanan Pasokan with score, grade, and breakdown", async () => {
+    render(
+      <Workspace mode="demo">
+        <Dashboard />
+      </Workspace>,
+    );
+
+    const panel = await screen.findByRole("region", { name: /Skor Ketahanan Pasokan/i });
+    await waitFor(() => expect(countCalls("/api/simulate/compare")).toBe(1));
+
+    expect(within(panel).getByText("75")).toBeInTheDocument();
+    expect(within(panel).getByText("Tangguh")).toBeInTheDocument();
+    expect(within(panel).getByText("Diversifikasi pasokan")).toBeInTheDocument();
+    expect(within(panel).getByText("100%")).toBeInTheDocument();
+    expect(within(panel).getByText("Ketahanan saat gangguan")).toBeInTheDocument();
+    expect(within(panel).getByText("47%")).toBeInTheDocument();
+    expect(within(panel).getByText("Daya pulih mitigasi")).toBeInTheDocument();
+    expect(within(panel).getByText("76%")).toBeInTheDocument();
+  });
+
+  it("does not call /api/simulate/compare or show Skor Ketahanan Pasokan on empty workspace, keeping Mulai dari nol clean of Dapur Sari", async () => {
+    render(
+      <Workspace mode="workspace">
+        <Dashboard />
+      </Workspace>,
+    );
+
+    expect(await screen.findByText("Mulai dari nol")).toBeInTheDocument();
+    expect(countCalls("/api/simulate/compare")).toBe(0);
+    expect(screen.queryByRole("region", { name: /Skor Ketahanan Pasokan/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Skor Ketahanan Pasokan/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Dapur Sari/)).not.toBeInTheDocument();
+  });
+
+  it("does not retry /api/simulate/compare in a loop when comparison fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/simulate/compare") {
+          calls.push({ url, method: init?.method ?? "GET", body: undefined, signal: init?.signal });
+          return json({ error: "Simulasi gagal sementara." }, 500);
+        }
+        return handler(url, init);
+      }),
+    );
+
+    render(
+      <Workspace mode="demo">
+        <Dashboard />
+      </Workspace>,
+    );
+
+    const panel = await screen.findByRole("region", { name: /Skor Ketahanan Pasokan/i });
+    await waitFor(() => expect(countCalls("/api/simulate/compare")).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(countCalls("/api/simulate/compare")).toBe(1);
+    expect(within(panel).getByText("100")).toBeInTheDocument();
+  });
+});
+
+describe("SupplyNetwork Overlay Hasil Simulasi", () => {
+  it("shows Tampilkan Dampak Simulasi toggle, displays mitigation overlay badges in node list and detail, and hides them when toggled off", async () => {
+    const user = userEvent.setup();
+    render(
+      <Workspace mode="demo">
+        <SupplyNetwork />
+      </Workspace>,
+    );
+
+    await screen.findByRole("heading", { level: 1, name: "Jaringan Pasok" });
+    await waitFor(() => expect(countCalls("/api/simulate/compare")).toBe(1));
+
+    const toggle = screen.getByRole("checkbox", { name: "Tampilkan Dampak Simulasi" });
+    expect(toggle).toBeChecked();
+
+    await user.selectOptions(screen.getByLabelText("Skenario jaringan"), "mitigation");
+
+    await waitFor(() => {
+      const lastProps = networkCanvasSpy.mock.calls.at(-1)?.[0] as { nodes: NetworkNode[]; edges: NetworkEdge[] } | undefined;
+      expect(lastProps?.nodes.find((n) => n.id === "material:flour")?.overlay?.tone).toBe("bad");
+      expect(lastProps?.edges.find((e) => e.id === "alternative:supplier_b_flour_offer")).toMatchObject({
+        used: true,
+        overlayLabel: "12 pak",
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: /Daftar/ }));
+
+    expect(screen.getByText("68/100 unit")).toBeInTheDocument();
+    expect(screen.getByText("100% terpakai")).toBeInTheDocument();
+    expect(screen.getByText("Dipakai 12 pak")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Tepung terigu/ }));
+    const detail = screen.getByRole("region", { name: "Detail hubungan" });
+    expect(within(detail).getByText("100% terpakai")).toBeInTheDocument();
+    expect(within(detail).getByText("Pembatas")).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).not.toBeChecked();
+
+    expect(screen.queryByText("68/100 unit")).not.toBeInTheDocument();
+    expect(screen.queryByText("100% terpakai")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dipakai 12 pak")).not.toBeInTheDocument();
+    expect(within(detail).queryByText("100% terpakai")).not.toBeInTheDocument();
+  });
+
+  it("does not call /api/simulate/compare on empty workspace and does not retry infinitely on error", async () => {
+    render(
+      <Workspace mode="workspace">
+        <SupplyNetwork />
+      </Workspace>,
+    );
+    await screen.findByText(/Belum ada pemasok, bahan, atau produk/);
+    expect(countCalls("/api/simulate/compare")).toBe(0);
+    cleanup();
+
+    calls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/simulate/compare") {
+          calls.push({ url, method: init?.method ?? "GET", body: undefined, signal: init?.signal });
+          return json({ error: "Gagal membandingkan." }, 500);
+        }
+        return handler(url, init);
+      }),
+    );
+    render(
+      <Workspace mode="demo">
+        <SupplyNetwork />
+      </Workspace>,
+    );
+    await screen.findByRole("heading", { level: 1, name: "Jaringan Pasok" });
+    await waitFor(() => expect(countCalls("/api/simulate/compare")).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(countCalls("/api/simulate/compare")).toBe(1);
   });
 });
