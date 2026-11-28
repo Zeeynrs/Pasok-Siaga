@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { DAPUR_SARI_FALLBACK_FIXTURE } from "@/lib/domain/fixture";
 import type { ScenarioResult, WorkspaceData } from "@/lib/domain/types";
-import { analyzeNetwork, recomputeComparisonView, toComparisonView, toSimulationView } from "@/lib/view-models";
+import { analyzeNetwork, computeResilienceScore, recomputeComparisonView, toComparisonView, toSimulationView } from "@/lib/view-models";
+import { formatMoney } from "@/lib/format";
 import { solveScenario } from "@/lib/solver/milp-solver";
 
 const fresh = (): WorkspaceData => structuredClone(DAPUR_SARI_FALLBACK_FIXTURE);
@@ -67,6 +68,75 @@ describe("analyzeNetwork", () => {
     expect(out.nodes.find((n) => n.id === "material:flour")!.status).toBe("inactive");
     expect(out.nodes.find((n) => n.id === "product:bread")!.status).toBe("inactive");
     expect(out.warnings).toContain("Tepung terigu tidak memiliki stok atau pemasok aktif dalam skenario ini.");
+  });
+
+  it("attaches simulation overlays on nodes and used alternative edges when simulation is optimal", () => {
+    const { snapshot } = fresh();
+    const mitigation = byId("mitigation");
+    const mitigationSim = toSimulationView(results[2], snapshot, mitigation);
+    const net = analyzeNetwork(snapshot, mitigation, mitigationSim);
+    const node = (id: string) => net.nodes.find((n) => n.id === id)!;
+    const edge = (id: string) => net.edges.find((e) => e.id === id)!;
+
+    expect(node("product:bread").overlay).toEqual({
+      metric: "68/100 unit",
+      badge: "Sebagian",
+      tone: "warning",
+    });
+    expect(node("product:cookies").overlay).toEqual({
+      metric: "30/30 unit",
+      badge: "Terpenuhi",
+      tone: "good",
+    });
+    expect(node("material:flour").overlay).toEqual({
+      metric: "100% terpakai",
+      badge: "Pembatas",
+      tone: "bad",
+    });
+    expect(node("material:sugar").overlay).toMatchObject({
+      badge: "Cukup",
+      tone: "good",
+    });
+    expect(node("supplier:supplier_b").overlay).toEqual({
+      badge: "Dipakai 12 pak",
+      metric: formatMoney(12_000),
+      tone: "good",
+    });
+    expect(node("supplier:supplier_a").overlay).toBeUndefined();
+    expect(edge("alternative:supplier_b_flour_offer")).toMatchObject({
+      used: true,
+      overlayLabel: "12 pak",
+    });
+  });
+
+  it("preserves exact baseline output without overlay/used when simulation is omitted or kpis is null", () => {
+    const { snapshot } = fresh();
+    const baseline = byId("baseline");
+    const plain = analyzeNetwork(snapshot, baseline);
+    const failed = toSimulationView(
+      { ...results[0], status: "Error", message: "gagal", production: [], material_usage: [], alternative_purchases: [] },
+      snapshot,
+      baseline,
+    );
+    expect(failed.kpis).toBeNull();
+    expect(analyzeNetwork(snapshot, baseline, null)).toEqual(plain);
+    expect(analyzeNetwork(snapshot, baseline, failed)).toEqual(plain);
+    expect(plain.nodes.every((n) => n.overlay === undefined)).toBe(true);
+    expect(plain.edges.every((e) => e.used === undefined && e.overlayLabel === undefined)).toBe(true);
+  });
+
+  it("handles zero available_units in simulation material_usage without NaN", () => {
+    const { snapshot } = fresh();
+    const outage = byId("outage");
+    const sim = toSimulationView(results[1], snapshot, outage);
+    const zeroSim = {
+      ...sim,
+      material_usage: sim.material_usage.map((m) =>
+        m.material_id === "flour" ? { ...m, available_units: 0, used_units: 0, remaining_units: 0 } : m,
+      ),
+    };
+    const net = analyzeNetwork(snapshot, outage, zeroSim);
+    expect(net.nodes.find((n) => n.id === "material:flour")!.overlay?.metric).toBe("0% terpakai");
   });
 });
 
@@ -221,5 +291,95 @@ describe("recomputeComparisonView", () => {
       to_scenario_id: "mitigasi_2",
       net_contribution_delta_idr: customNet - baselineNet,
     });
+  });
+});
+
+describe("computeResilienceScore", () => {
+  it("computes deterministic weighted resilience score for Dapur Sari", () => {
+    const { snapshot, scenarios } = fresh();
+    const network = analyzeNetwork(snapshot, byId("baseline"));
+    const comparison = toComparisonView(results, scenarios, snapshot);
+
+    const resilience = computeResilienceScore(snapshot, network, comparison);
+    expect(resilience.structural_pct).toBe(100);
+    expect(resilience.outage_retention_pct).toBe(47);
+    expect(resilience.mitigation_score_pct).toBe(76);
+    expect(resilience.score).toBe(75);
+    expect(resilience.grade).toBe("Tangguh");
+    expect(resilience.tone).toBe("good");
+    expect(resilience.summary).toContain("75/100");
+  });
+
+  it("drops structural_pct when backup supplier is removed from snapshot", () => {
+    const d = fresh();
+    d.snapshot.alternative_offers = [];
+    const network = analyzeNetwork(d.snapshot, byId("baseline"));
+    const comparison = toComparisonView(results, d.scenarios, d.snapshot);
+
+    const resilience = computeResilienceScore(d.snapshot, network, comparison);
+    expect(resilience.structural_pct).toBe(67);
+    expect(resilience.score).toBe(65);
+    expect(resilience.grade).toBe("Cukup Siap");
+    expect(resilience.tone).toBe("warning");
+  });
+
+  it("handles null comparison, zero baseline, empty bom, and extreme values without NaN or Infinity", () => {
+    const { snapshot, scenarios } = fresh();
+    const network = analyzeNetwork(snapshot, byId("baseline"));
+
+    const noComp = computeResilienceScore(snapshot, network, null);
+    expect(noComp).toMatchObject({
+      score: 100,
+      grade: "Tangguh",
+      tone: "good",
+      structural_pct: 100,
+      outage_retention_pct: null,
+      mitigation_score_pct: null,
+    });
+    expect(Number.isFinite(noComp.score)).toBe(true);
+
+    const zeroBaselineComp = toComparisonView(
+      results.map((r) => (r.scenario_id === "baseline" ? { ...r, net_contribution_idr: 0 } : r)),
+      scenarios,
+      snapshot,
+    );
+    const zeroBase = computeResilienceScore(snapshot, network, zeroBaselineComp);
+    expect(zeroBase.outage_retention_pct).toBeNull();
+    expect(zeroBase.mitigation_score_pct).toBeNull();
+    expect(zeroBase.score).toBe(100);
+    expect(Number.isFinite(zeroBase.score)).toBe(true);
+
+    const emptyBomSnapshot = {
+      ...snapshot,
+      bom: [],
+      committed_deliveries: [],
+      alternative_offers: [],
+    };
+    const emptyNet = analyzeNetwork(emptyBomSnapshot, byId("baseline"));
+    const emptyScore = computeResilienceScore(emptyBomSnapshot, emptyNet, null);
+    expect(emptyScore.structural_pct).toBe(100);
+    expect(emptyScore.score).toBe(100);
+    expect(Number.isFinite(emptyScore.score)).toBe(true);
+
+    const badComp = toComparisonView(
+      results.map((r) =>
+        r.scenario_id === "outage"
+          ? { ...r, net_contribution_idr: -50_000 }
+          : r.scenario_id === "mitigation"
+            ? { ...r, net_contribution_idr: 50_000 }
+            : r,
+      ),
+      scenarios,
+      snapshot,
+    );
+    const badSnap = fresh().snapshot;
+    badSnap.alternative_offers = [];
+    const badNet = analyzeNetwork(badSnap, byId("baseline"));
+    const rentan = computeResilienceScore(badSnap, badNet, badComp);
+    expect(rentan.outage_retention_pct).toBe(0);
+    expect(rentan.mitigation_score_pct).toBe(11);
+    expect(rentan.score).toBe(25);
+    expect(rentan.grade).toBe("Rentan");
+    expect(rentan.tone).toBe("bad");
   });
 });

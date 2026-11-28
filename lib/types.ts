@@ -50,6 +50,12 @@ export interface ComparisonResult {
 
 export type NetworkKind = "supplier" | "material" | "product";
 
+export interface NetworkOverlay {
+  badge: string;
+  metric: string;
+  tone: "good" | "warning" | "bad" | "neutral";
+}
+
 export interface NetworkNode {
   id: string;
   entity_id: string;
@@ -57,6 +63,7 @@ export interface NetworkNode {
   kind: NetworkKind;
   status: "active" | "inactive" | "single_source" | "stock_only" | "ready";
   detail: string;
+  overlay?: NetworkOverlay;
 }
 
 export interface NetworkEdge {
@@ -65,6 +72,8 @@ export interface NetworkEdge {
   target: string;
   kind: "committed" | "alternative" | "bom";
   active: boolean;
+  overlayLabel?: string;
+  used?: boolean;
 }
 
 export interface NetworkResult {
@@ -72,4 +81,14 @@ export interface NetworkResult {
   edges: NetworkEdge[];
   single_source_risks: { material_id: string; supplier_id: string; product_ids: string[] }[];
   warnings: string[];
+}
+
+export interface ResilienceScore {
+  score: number;
+  grade: "Tangguh" | "Cukup Siap" | "Rentan";
+  tone: "good" | "warning" | "bad";
+  structural_pct: number;
+  outage_retention_pct: number | null;
+  mitigation_score_pct: number | null;
+  summary: string;
 }

@@ -1,10 +1,13 @@
 import type { ScenarioConfig, ScenarioResult, SolverStatus as DomainStatus, WorkspaceSnapshot } from "@/lib/domain/types";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { resolveScenarioInputs } from "@/lib/solver/inputs";
 import type {
   ComparisonResult,
   NetworkEdge,
   NetworkNode,
+  NetworkOverlay,
   NetworkResult,
+  ResilienceScore,
   SimulationResult,
   SolverStatus,
 } from "@/lib/types";
@@ -14,7 +17,8 @@ import type {
  * dibangun di sini agar komponen UI tetap sederhana.
  */
 
-const formatInt = (n: number) => n.toLocaleString("id-ID");
+const formatInt = formatNumber;
+const clamp = (min: number, max: number, value: number) => Math.min(max, Math.max(min, value));
 
 /** Pesan gangguan (pemasok dinonaktifkan atau pengiriman melewati batas) untuk satu skenario. */
 function disruptionNotes(snapshot: WorkspaceSnapshot, scenario: ScenarioConfig): string[] {
@@ -54,10 +58,37 @@ function offerWarnings(snapshot: WorkspaceSnapshot, scenario: ScenarioConfig): s
 
 /* ------------------------------- Jaringan pasok ------------------------------ */
 
-export function analyzeNetwork(snapshot: WorkspaceSnapshot, scenario: ScenarioConfig): NetworkResult {
+/** Membangun overlay status optimasi dari hasil simulasi valid untuk node dan edge jaringan pasok. */
+function buildSimulationOverlayLookup(simulation?: SimulationResult | null) {
+  const validSim = simulation && simulation.kpis !== null ? simulation : null;
+  if (!validSim) return null;
+
+  const productionByProduct = new Map(validSim.production.map((p) => [p.product_id, p]));
+  const usageByMaterial = new Map(validSim.material_usage.map((u) => [u.material_id, u]));
+  const packsByOffer = new Map<string, number>();
+  const purchaseBySupplier = new Map<string, { packs: number; premium: number }>();
+
+  for (const purchase of validSim.purchases) {
+    packsByOffer.set(purchase.offer_id, (packsByOffer.get(purchase.offer_id) ?? 0) + purchase.packs);
+    const prev = purchaseBySupplier.get(purchase.supplier_id) ?? { packs: 0, premium: 0 };
+    purchaseBySupplier.set(purchase.supplier_id, {
+      packs: prev.packs + purchase.packs,
+      premium: prev.premium + purchase.incremental_premium_idr,
+    });
+  }
+
+  return { productionByProduct, usageByMaterial, packsByOffer, purchaseBySupplier };
+}
+
+export function analyzeNetwork(
+  snapshot: WorkspaceSnapshot,
+  scenario: ScenarioConfig,
+  simulation?: SimulationResult | null,
+): NetworkResult {
   const inputs = resolveScenarioInputs(snapshot, scenario);
   const counted = new Map(inputs.deliveryStatuses.map((d) => [d.delivery_id, d.counted]));
   const offerById = new Map(inputs.offerInfo.map((o) => [o.offer.id, o]));
+  const overlayLookup = buildSimulationOverlayLookup(simulation);
 
   const edges: NetworkEdge[] = [];
   const suppliersPerMaterial = new Map<string, Set<string>>();
@@ -72,13 +103,21 @@ export function analyzeNetwork(snapshot: WorkspaceSnapshot, scenario: ScenarioCo
       activeSuppliers.add(supplierId);
       available.set(materialId, (available.get(materialId) ?? 0) + units);
     }
-    edges.push({
+    const edge: NetworkEdge = {
       id: `${kind}:${supplyId}`,
       source: `supplier:${supplierId}`,
       target: `material:${materialId}`,
       kind,
       active: units > 0,
-    });
+    };
+    if (kind === "alternative" && overlayLookup) {
+      const packs = overlayLookup.packsByOffer.get(supplyId) ?? 0;
+      if (packs > 0) {
+        edge.used = true;
+        edge.overlayLabel = `${formatInt(packs)} pak`;
+      }
+    }
+    edges.push(edge);
   };
 
   for (const d of snapshot.committed_deliveries) {
@@ -102,11 +141,20 @@ export function analyzeNetwork(snapshot: WorkspaceSnapshot, scenario: ScenarioCo
   const nodes: NetworkNode[] = [];
   for (const s of snapshot.suppliers) {
     const active = activeSuppliers.has(s.id);
-    nodes.push({
+    const node: NetworkNode = {
       id: `supplier:${s.id}`, entity_id: s.id, kind: "supplier", label: s.name,
       status: active ? "active" : "inactive",
       detail: active ? "Pasokan memenuhi batas skenario." : "Pasokan tidak dihitung dalam skenario ini.",
-    });
+    };
+    const purchase = overlayLookup?.purchaseBySupplier.get(s.id);
+    if (purchase && purchase.packs > 0) {
+      node.overlay = {
+        badge: `Dipakai ${formatInt(purchase.packs)} pak`,
+        metric: formatMoney(purchase.premium),
+        tone: "good",
+      };
+    }
+    nodes.push(node);
   }
 
   const risks: NetworkResult["single_source_risks"] = [];
@@ -129,20 +177,40 @@ export function analyzeNetwork(snapshot: WorkspaceSnapshot, scenario: ScenarioCo
       status = "inactive";
       if (productIds.length) warnings.push(`${m.name} tidak memiliki stok atau pemasok aktif dalam skenario ini.`);
     }
-    nodes.push({
+    const node: NetworkNode = {
       id: `material:${m.id}`, entity_id: m.id, kind: "material", label: m.name, status,
       detail: `${supplierIds.length} pemasok masuk perhitungan. Stok awal ${formatInt(stock)} ${m.base_unit}.`,
-    });
+    };
+    const usage = overlayLookup?.usageByMaterial.get(m.id);
+    if (usage) {
+      const pctUsed = usage.available_units > 0 ? clamp(0, 100, Math.round((usage.used_units / usage.available_units) * 100)) : 0;
+      const overlay: NetworkOverlay = {
+        metric: `${formatInt(pctUsed)}% terpakai`,
+        badge: usage.is_bottleneck ? "Pembatas" : "Cukup",
+        tone: usage.is_bottleneck ? "bad" : pctUsed >= 85 ? "warning" : "good",
+      };
+      node.overlay = overlay;
+    }
+    nodes.push(node);
   }
 
   for (const p of snapshot.products) {
     const ready = !unreadyProducts.has(p.id);
-    nodes.push({
+    const node: NetworkNode = {
       id: `product:${p.id}`, entity_id: p.id, kind: "product", label: p.name, status: ready ? "ready" : "inactive",
       detail: ready
         ? "Pasokan potensial mencukupi kebutuhan bahan untuk satu unit."
         : "Pasokan potensial belum mencukupi kebutuhan bahan untuk satu unit.",
-    });
+    };
+    const line = overlayLookup?.productionByProduct.get(p.id);
+    if (line) {
+      node.overlay = {
+        metric: `${formatInt(line.units)}/${formatInt(line.demand_units)} unit`,
+        badge: line.unmet_units === 0 ? "Terpenuhi" : line.units > 0 ? "Sebagian" : "Terhenti",
+        tone: line.unmet_units === 0 ? "good" : line.units > 0 ? "warning" : "bad",
+      };
+    }
+    nodes.push(node);
   }
 
   return { nodes, edges, single_source_risks: risks, warnings: [...new Set(warnings)] };
@@ -312,4 +380,85 @@ export function recomputeComparisonView(
     ? outcome.results.filter((v) => visibleSet.has(v.scenario_id))
     : outcome.results;
   return summarizeComparison(outcome.results, visibleViews, roles);
+}
+
+/* -------------------------- Skor Ketahanan Pasokan --------------------------- */
+
+/** Menghitung Skor Ketahanan Pasokan (0–100) dari diversifikasi struktural dan dampak finansial perbandingan skenario. */
+export function computeResilienceScore(
+  snapshot: WorkspaceSnapshot,
+  network: NetworkResult,
+  comparison?: ComparisonResult | null,
+): ResilienceScore {
+  const activeSupplierIds = new Set(snapshot.suppliers.filter((s) => s.active).map((s) => s.id));
+  const bomMaterialIds = new Set(snapshot.bom.map((item) => item.material_id));
+  const anySupplierMaterialIds = new Set<string>();
+  const activeSuppliersByMaterial = new Map<string, Set<string>>();
+
+  const recordSupplier = (materialId: string, supplierId: string, usable: boolean) => {
+    if (!usable || !activeSupplierIds.has(supplierId)) return;
+    anySupplierMaterialIds.add(materialId);
+    const set = activeSuppliersByMaterial.get(materialId) ?? new Set<string>();
+    set.add(supplierId);
+    activeSuppliersByMaterial.set(materialId, set);
+  };
+
+  for (const delivery of snapshot.committed_deliveries) {
+    recordSupplier(delivery.material_id, delivery.supplier_id, delivery.enabled_in_baseline && delivery.quantity_base_units > 0);
+  }
+  for (const offer of snapshot.alternative_offers) {
+    recordSupplier(offer.material_id, offer.supplier_id, offer.enabled_in_scenario && offer.max_packs > 0 && offer.pack_size_base_units > 0);
+  }
+
+  const evaluatedMaterials = snapshot.materials.filter(
+    (m) => bomMaterialIds.has(m.id) || anySupplierMaterialIds.has(m.id),
+  );
+  const singleSourceIds = new Set(network.single_source_risks.map((risk) => risk.material_id));
+
+  let structural_pct = 100;
+  if (evaluatedMaterials.length > 0) {
+    const diversifiedCount = evaluatedMaterials.filter(
+      (m) => (activeSuppliersByMaterial.get(m.id)?.size ?? 0) >= 2 || !singleSourceIds.has(m.id),
+    ).length;
+    structural_pct = clamp(0, 100, Math.round((diversifiedCount / evaluatedMaterials.length) * 100));
+  }
+
+  const netFor = (scenarioId: string) =>
+    comparison?.results.find((r) => r.scenario_id === scenarioId)?.kpis?.net_contribution_idr ?? null;
+
+  const baseline = netFor("baseline");
+  const outage = netFor("outage");
+  const mitigation = netFor("mitigation");
+  const hasBaseline = baseline !== null && Number.isFinite(baseline) && baseline > 0;
+
+  const outage_retention_pct =
+    hasBaseline && outage !== null && Number.isFinite(outage)
+      ? clamp(0, 100, Math.round((outage / baseline) * 100))
+      : null;
+  const mitigation_score_pct =
+    hasBaseline && mitigation !== null && Number.isFinite(mitigation)
+      ? clamp(0, 100, Math.round((mitigation / baseline) * 100))
+      : null;
+
+  const score =
+    outage_retention_pct !== null && mitigation_score_pct !== null
+      ? clamp(0, 100, Math.round(0.3 * structural_pct + 0.3 * outage_retention_pct + 0.4 * mitigation_score_pct))
+      : structural_pct;
+
+  const grade: ResilienceScore["grade"] = score >= 75 ? "Tangguh" : score >= 45 ? "Cukup Siap" : "Rentan";
+  const tone: ResilienceScore["tone"] = score >= 75 ? "good" : score >= 45 ? "warning" : "bad";
+  const summary =
+    outage_retention_pct !== null && mitigation_score_pct !== null
+      ? `Skor ${formatInt(score)}/100 (${grade}): diversifikasi pasokan ${formatInt(structural_pct)}%, bertahan ${formatInt(outage_retention_pct)}% saat gangguan, dan pulih ke ${formatInt(mitigation_score_pct)}% dengan mitigasi.`
+      : `Skor struktural ${formatInt(score)}/100 (${grade}) berdasarkan diversifikasi pasokan ${formatInt(structural_pct)}%; hasil simulasi perbandingan belum tersedia.`;
+
+  return {
+    score,
+    grade,
+    tone,
+    structural_pct,
+    outage_retention_pct,
+    mitigation_score_pct,
+    summary,
+  };
 }
