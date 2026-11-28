@@ -15,6 +15,7 @@ import { recomputeComparisonView, type ComparisonRoles } from "@/lib/view-models
 import { useWorkspace } from "@/lib/workspace-context";
 import { SolverLabel, WarningList } from "./results";
 import { scenarioLabel } from "./scenario-picker";
+import { StressTestPanel } from "./stress-test-panel";
 
 const Chart = dynamic(() => import("./comparison-chart").then(({ ComparisonChart }) => ComparisonChart), { ssr: false, loading: () => <Busy label="Memuat grafik…" /> });
 const shortNames: Record<string, string> = { baseline: "Normal", outage: "Gangguan", mitigation: "Mitigasi" };
@@ -149,7 +150,7 @@ function ComparisonDetails({ outcome }: { outcome: ComparisonResult }) {
 }
 
 export function Comparison() {
-  const { comparison, comparing, comparisonError, signature, runComparison, href } = useWorkspace();
+  const { data, comparison, comparing, comparisonError, signature, runComparison, href } = useWorkspace();
   const attempted = useRef<string | null>(null);
   const fresh = comparison !== null && comparison.signature === signature;
   const [roles, setRoles] = useState<ComparisonRoles>(DEFAULT_ROLES);
@@ -228,6 +229,7 @@ export function Comparison() {
             onToggleVisible={handleToggleVisible}
           />
           <ComparisonDetails outcome={displayed} />
+          <StressTestPanel data={data} signature={signature} />
         </>
       )}
     </>
