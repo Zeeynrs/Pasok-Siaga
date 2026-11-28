@@ -1106,3 +1106,64 @@ select { appearance: auto; padding-right: 22px; }
   .results-actions .button, .comparison-header-actions .button, .detail-actions .button { width: 100%; justify-content: center; }
   .comparison-roles { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---- Skor ketahanan pasokan, overlay jaringan pasok, dan panel stress-test ---- */
+.resilience-panel { margin-bottom: 19px; }
+.resilience-panel .panel-heading { flex-wrap: wrap; align-items: center; }
+.resilience-score-badge { display: flex; align-items: center; gap: 10px; flex: none; }
+.resilience-score-value { display: inline-flex; align-items: baseline; gap: 2px; font-variant-numeric: tabular-nums; }
+.resilience-score-value strong { color: var(--deep); font-size: clamp(26px, 2.8vw, 34px); font-weight: 850; line-height: 1; letter-spacing: -.04em; }
+.resilience-score-value span { color: var(--muted); font-size: 13px; font-weight: 750; }
+.resilience-breakdown > div { min-width: 0; }
+
+.flow-node-body { min-width: 0; flex: 1; }
+.flow-overlay-pill { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; max-width: 100%; margin-top: 5px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.flow-node.flow-bottleneck { border-color: var(--bad); background: #fff6f3; box-shadow: 0 0 0 2px #f2c9bf, 0 4px 10px #953a361a; }
+.flow-node.flow-bottleneck.flow-selected { box-shadow: 0 0 0 2px var(--bad); }
+
+.network-overlay-toggle { flex: 0 0 auto; white-space: nowrap; }
+.node-list-tags { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; min-width: 0; }
+.node-overlay-tag { gap: 5px; font-variant-numeric: tabular-nums; }
+.detail-overlay { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--canvas); }
+.detail-overlay .tag { margin-top: 0; }
+.detail-overlay strong { color: var(--ink); font-size: 13px; font-weight: 850; font-variant-numeric: tabular-nums; }
+.detail-overlay-good { border-color: #c5dcc8; background: #f2f9f2; }
+.detail-overlay-warning { border-color: #ecd6ad; background: var(--warning-bg); }
+.detail-overlay-bad { border-color: #ecc8bf; background: var(--bad-bg); }
+.detail-overlay-neutral { border-color: var(--rule); background: var(--canvas); }
+
+.stress-test-panel { margin-top: 16px; }
+.stress-test-panel > .panel-heading { flex-wrap: wrap; align-items: center; }
+.stress-test-panel > .panel-heading .button { flex: none; }
+.stress-test-panel > .panel-body { display: grid; gap: 16px; }
+.stress-test-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.stress-test-panel .stale-notice { align-items: center; flex-wrap: wrap; margin-bottom: 0; }
+.stress-test-panel .stale-notice p { flex: 1 1 220px; }
+.stress-test-panel .stale-notice .button { flex: none; margin-left: auto; }
+.stress-test-results { display: grid; gap: 16px; min-width: 0; }
+.stress-test-metrics > div { min-width: 0; }
+.stress-test-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; min-width: 0; }
+.stress-test-offers { display: grid; gap: 16px; min-width: 0; }
+.stress-offer-card > .panel-heading { flex-wrap: wrap; align-items: flex-start; }
+.stress-offer-card > .panel-heading .tag { flex: none; }
+.stress-offer-card .panel-body { display: grid; gap: 14px; }
+.stress-offer-metrics > div { min-width: 0; }
+.stress-offer-metrics strong { font-size: clamp(16px, 1.6vw, 22px); font-variant-numeric: tabular-nums; }
+.stress-test-chart { min-width: 0; padding: 6px 4px 0 0; overflow: hidden; }
+.stress-test-chart + .data-table { margin-top: 12px; }
+
+@media (max-width: 1020px) {
+  .stress-test-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 680px) {
+  .resilience-panel .panel-heading { flex-direction: column; align-items: flex-start; }
+  .network-overlay-toggle { flex: 1 1 100%; white-space: normal; }
+  .node-list button { grid-template-columns: minmax(0, 1fr) auto; }
+  .node-list button > svg { grid-column: 2; grid-row: 1 / span 2; }
+  .node-list-tags { grid-column: 1; justify-content: flex-start; }
+  .stress-test-panel > .panel-heading { flex-direction: column; align-items: stretch; }
+  .stress-test-panel > .panel-heading .button { width: 100%; }
+  .stress-test-controls { grid-template-columns: minmax(0, 1fr); }
+  .stress-test-panel .stale-notice .button { width: 100%; margin-left: 0; }
+}
